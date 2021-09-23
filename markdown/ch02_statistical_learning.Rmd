@@ -79,12 +79,64 @@ $E(y_0 - \hat{f}(x_0))^2 = Var(\hat{f}(x_0)) + [Bias(\hat{f}(x_0))]^2 + Var(\eps
 
     a) For each of these scenarios, we need to consider the variance of the function describing the relationship between the response and the predictor(s) between successive training sets and the bias, or the error introduced when models are used to simplify reality.  Both of these metrics factor into the overall test mean squared error (MSE), or the mean squared difference between the predicted value or the value estimated by the function and the observed value (in the case of supervised statistical learning).   
     
-    b) 
+    b) In a case where there is a small sample size and a large number of predictors, an inflexible model would perform better than a flexible model.  Although the bias would be larger using the inflexible model, the power of this approach is the ability to be able to identify the predictors that are associated with the response, assuming that only a small fraction are actually important.
     
     c) In a scenario where the relationship between the predictors and the response is highly non-linear, we would expect the flexible statistical learning method to be better than an inflexible method (generally).  Inflexible learning methods, like ordinary least squares regression, for example, will likely have a low variance between successive training data sets, but have a large bias because we are attempting to explain a non-linear relationship with assumptions in a simplified linear reality. 
     
     d) In contrast to c), in a scenario where the variance of the error terms is extremely high, an inflexible method may be preferred because fitting a flexible statistical model on successive training data sets that are substantially different could be driving the high variance.  
-    
+
+2) The following questions ask to explain whether the scenario is a classification or regression problem, and whether the primary question of interest is inference or prediction.  We are also asked to identify $n$, the number of samples, and $p$, the predictors.
   
+    a) In this scenario, we are dealing with $n=500$ samples (i.e., the 500 firms) and $p=3$ predictors: profit, number of employees, and industry.  In this example, the CEO salary is the response.  This is a classic regression problem where the primary goal is inference, because we are interested in understanding the relationship between the set of predictors and CEO salary and the data generating mechanism.  For example, we would expect profit to have a positive influence on CEO salary, but what about number of employees and industry?  Further, we are not necessarily interested in predicting a CEO's salary based on historic data.
+    
+    b) This is a classic example of a classification problem where the primary goal is prediction using historical data  We have $n=20$ products and $p=13$ predictors.  Here, the response is whether the product was a success or failure, based on these predictors.  I argue that the goal is prediction here because when we're launching a new product, we want to know how likely it is to succeed, plain and simple, and the prompt does not suggest that we are interested in understanding _how_ exactly each of these variables influence the response.
+    
+    It seems plausible to pivot and frame this as an inference problem as well, as presumably you would want to know which variables were most influential in whether the product was a success or failure.  
+    
+    c) This is another example where the goal is prediction, but framed as a regression problem because we are interested in predicting a quantitative response.  Since we have weekly data for all of 2012, we have $n=52$ samples, with $p=3$ predictors.  
+    
+3) This question revisits the bias-variance decomposition and asks us to draw a sketch of a typical plot showing the bias, variance, training and test error, and Bayes or irreducible error curves.  Instead, I'll explain how each curve would look, generally, and why they have the shapes they do.
+
+    On the x-axis we would display the flexibility of the model, going from less flexible (less) to more flexible (right).  In general, less flexible models will have the following properties:
+
+    * __Bias:__ less flexible methods suffer from the fact that they attempt to approximate complex reality using a simplified model, which inherently introduces error due to differences between the observed data and the responses predicted by the estimated function.
+    
+    * __Variance:__ less flexible methods generally have lower variance because the models may assume the relationship is linear (in the case of linear regression) and go through "most" of the data without trying to go through each point.
+    
+     * __training error:__ higher training error, again getting back to the fact that the model attempts to simplify the relationship, which introduces error if the relationship is not linear, for example.
+     
+     * __test error:__ lower training error, because the model is able to generalize well to unseen test data.
+     
+     * __irreducible error:__ this stays fixed, because it is not related to the functional form of the relationship betweeen the response and predictors.
+     
+     On the other hand, more flexible models will generally show the opposite of each of the properties described above.
+     
+4) This question asks us to think of applications for statistical learning methods.
+
+    a) Classification applications:
+    
+        i) In population genetics, we are often interested in exploring how genetic variation across the genome can be used for understanding population structure.  A classification problem focused on inference would be building a statistical learning method which classifies samples into groups or "populations" based on the genetic data alone.
+        
+        ii) Framing the above example slightly differently, we have some genotype data for fish spawning in different rivers and we know fish A only spawns in river A, and so on and so forth.  We are then given several fish of unknown origin and asked to identify the population of origin using the genotype data alone.  Here, we're presented with a classification problem where the primary goal is prediction to put the fish into the correct spawning river.
+        
+        iii) In a different example, we might be interested in knowing which variables affect whether a person will default on a loan.  Here, the question is one of inference, because we are interested in the functional form of the relationship between the binary outcome and the set of predictors.
+    
+    b) Regression applications:
+    
+        i) Let's say we are interested in understanding how a series of predictors influences the price of a home in a given city.  Here, the predictors may be the lot size, school system rating in the area, square footage of the home, number of bathrooms and bedrooms, etc., and the response is the price of the home.  This would be an inference question, as we're interested in the relationship between the predictors and the response.
+      
+        ii) In another scenario, we may be interested in using regression to predict the highway fuel economy of a vehicle (the response) given a set of predictors like the model, the engine displacement, number of cylinders, transmission, and the fuel type.  This is framed as a prediction question because we don't really care about the relationship; we're just interested in predicting a quantitative response correctly as often as possible.
+      
+        iii) Framing the above question slightly different as an inference problem, I could could pose a question as an auto-maker: given all of these predictor variables, which subset has the most influence on the highway fuel economy.  That could help direct effects towards improving those variables which have a positive influence, and trying to mitigate for the variables that have a negative influence.
+    
+    c) Cluster analysis:
+    
+        i) In a scenario where I had RNA-seq data generated from many different cell types in a piece of tissue, cluster analysis would facilitate the discovery of clusters using the data alone which may correspond to cell type.
+      
+        ii) In another situation suppose I sampled fish in a lake and was interested in characterizing population structure using genetic data alone: this would be a great application for cluster analysis to reveal any interesting patterns in the data.
+      
+        iii) Finally, in a different scenario (although not a very plausible one), say we collected data on vehicles including engine displacement, number of cylinders, transmission, drive train, and fuel economy.  We could use cluster analysis to identify interesting groups within those data, which may correspond to vehicle class (e.g., compact, etc).
+      
+5) 
 
 ### Applied
