@@ -137,6 +137,77 @@ $E(y_0 - \hat{f}(x_0))^2 = Var(\hat{f}(x_0)) + [Bias(\hat{f}(x_0))]^2 + Var(\eps
       
         iii) Finally, in a different scenario (although not a very plausible one), say we collected data on vehicles including engine displacement, number of cylinders, transmission, drive train, and fuel economy.  We could use cluster analysis to identify interesting groups within those data, which may correspond to vehicle class (e.g., compact, etc).
       
-5) 
+5) The advantages of using a very flexible model is that you don't have to explicitly assume the data follow a defined distribution (e.g., linear).  This can be beneficial in scenarios where you aren't concerned with interpretability; rather, your sole focus may be prediction accuracy.  On the other hand, very flexible models suffer from a general lack of interpretability, overfitting, and lack of generalizability, particularly as flexibility increas  In some situations, a less flexible model may be preferred if the goal is inference and interpreting model coefficients with the added benefit of generally lower test mean squared error relative to more flexible models.
 
+6) In essence, a parametric statistical learning method simplifies a problem by boiling down the shape of the function $f$ down to just a few parameters and assumes that shape follows a known distribution.  In a regression setting, parametric learning methods are advantageous in that increase interpretability and in general, simpler models are often preferred relative to overly complex models.  Additionally, parametric methods can be used in situations with smaller sample sizes (generally far more samples are needed when using non-parametric methods).  In contrast to parametric methods, non-parametric methods don't rely on explicit assumptions about the shape of the function $f$, so are much more flexible, but at the expense of interpretability: non-parametric methods aren't simplifying a functional form down to just a few parameters.  Further, more flexible methods suffer from overfitting and high test error associated with poor performance on unseen test data.
+
+7) The table below is re-recreated from the textbook:
+
+```{r message = FALSE, warning = FALSE}
+library(tidyverse)
+library(kableExtra)
+
+df <- tribble(
+  ~X1, ~X2, ~X3, ~Y,
+  0, 3, 0, "Red", 
+  2, 0, 0, "Red", 
+  0, 1, 3, "Red", 
+  0, 1, 2, "Green", 
+  -1, 0, 1, "Green", 
+  1, 1, 1, "Red"
+) %>% 
+  rownames_to_column("Obs.")
+
+df %>% 
+  kbl() %>% 
+  kable_classic_2(full_width = FALSE)
+```
+
+a) First, we'll calculate the Euclidean distance between each observation as a test point with the values $X1 = X2 = X3 = 0$.  Note, the Euclidean distance formula is $\sqrt(\sum((x_i - y_i)^2))$.  We'll sort the table below based on the calculated Euclidean distance.
+    
+```{r warning = FALSE, message = FALSE}
+# Calculate Euclidean distance
+df %>% 
+  pivot_longer(-c(`Obs.`, Y), names_to = "X", values_to = "Value") %>% 
+  mutate(Distance = (Value - 0)^2) %>% 
+  group_by(`Obs.`, Y) %>% 
+  summarise(Distance = round(sqrt(sum(Distance)), 2)) %>% 
+  arrange(Distance) %>% 
+  kbl() %>% 
+  kable_classic_2(full_width = FALSE)
+```
+    
+b) For each test point, the KNN method looks at the $K$ number of points closest to the test point using the Euclidean distance and estimates the probabilities of belonging to one of $K$ classes.  If we chose a highly flexible model of $K=1$, we'll assign the test point to the class ("Red" or "Green") of the closest point (i.e., the point with the smallest Euclidean distance).  In this case, the point with the smallest Euclidean distance 1.41 is "Green."
+    
+    We can check this manual calculation using the `knn()` function from the `class` package.  The function requires us to define a training set, a test set, the classes of the training set, and the number of neighbors to be considered in the KNN algorithm.  We'll use the first table as the training data, the test point values for the single test case, and define the number of neighbors.
+    
+```{r}
+# KNN with K=1
+library(class)
+
+training_set <- df %>% 
+  dplyr::select(-c(`Obs.`, Y))
+test_set <- c(X1 = 0, X2 = 0, X3 = 0)
+classes <- df %>% 
+  dplyr::select(Y)
+
+# Run the KNN classifier
+knn(train = training_set,
+    test = test_set,
+    cl = classes$Y, 
+    k = 1)
+```
+    
+c) If we modeled $K=3$, looking now at the 3 closest points, we see that the most commonly occuring class (2/3) is "Red", so we'd assign the test point as "Red."  We can use the same approach as we did above to check our manual calculations.
+    
+```{r echo = TRUE}
+# Run KNN with K=3
+knn(train = training_set, 
+    test = test_set,
+    cl = classes$Y, 
+    k = 3)
+```
+    
+d) If the Bayes decision boundary in this particular problem is highly non-linear, the "best" value for $K$ would be small.  When the value for $K$ is small, for each individiual test point we are only evaluating the closest neighbor to assign a class, which will allow the KNN decision boundary to be extremely flexible and essentially "custom catered" for each test point.  When $K$ is large, we are considering more neighbors for each individual test point to estimate a probability and assign a class, which generally forces the KNN decision boundary to follow a linear form.
+    
 ### Applied
