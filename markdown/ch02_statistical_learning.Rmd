@@ -8,7 +8,7 @@ output:
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = FALSE)
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
 ```
 
 ## Notes
@@ -211,3 +211,317 @@ knn(train = training_set,
 d) If the Bayes decision boundary in this particular problem is highly non-linear, the "best" value for $K$ would be small.  When the value for $K$ is small, for each individiual test point we are only evaluating the closest neighbor to assign a class, which will allow the KNN decision boundary to be extremely flexible and essentially "custom catered" for each test point.  When $K$ is large, we are considering more neighbors for each individual test point to estimate a probability and assign a class, which generally forces the KNN decision boundary to follow a linear form.
     
 ### Applied
+
+8) This question uses the `College` data set from the ISLR2 package.
+
+    a) This first questions asks us to load the `College` data, but it is already distributed in the ISLR2 package.
+    
+    b) Add the rownames as a column.  I'll also clean up the column names to make all of them lowercase and replace the period characters with underscores using the janitor package.  Note how the data frame has changed from the original one distributed in the ISLR2 package. 
+    
+```{r}
+library(janitor)
+library(ISLR2)
+college <- College %>% 
+  rownames_to_column("college") %>% 
+  clean_names()
+
+glimpse(college)
+```
+    
+c)
+
+    i) I'm going to skip this step.
+    
+    ii) I'm going to skip this question as well.
+    
+    iii) Side-by-side boxplots of out-of-state tuition for private and public schools.
+    
+```{r}
+library(scales)
+college %>%
+  mutate(private = case_when(
+    private == "Yes" ~ "private", 
+    private == "No" ~ "public")
+  ) %>% 
+  ggplot(aes(private, outstate, fill = private)) + 
+  geom_boxplot() + 
+  scale_y_continuous(labels = dollar) + 
+  labs(x = "School type", 
+       y = "Out-of-state tuition (USD)", 
+       title = "Private vs public out-of-state tuition for 777 colleges and universities", 
+       caption = "Data from the ISLR2 package (https://cran.rstudio.com/web/packages/ISLR2/index.html)") + 
+  theme(
+    panel.background = element_rect(fill = "white", color = "black"),
+    panel.grid = element_blank(),
+    legend.position = "none"
+  )
+```
+
+iv) Here we'll create a new variable, `elite`, labeling each school where the proportion of their incoming students coming from the top 10% of their high school classes exceeds 50% as `elite`.  The remaining schools will be labeled as `non-elite`.  Then, we'll create a side-by-side box plot of the `elite` vs `non-elite` out-of-state tuition.  There are 78 elite schools and 699 non-elite schools based on the criterion defined above.
+
+```{r}
+college %>% 
+  mutate(elite = case_when(
+    top10perc > 50 ~ "elite", 
+    TRUE ~ "non_elite"
+  )) %>% 
+  ggplot(aes(elite, outstate, fill = elite)) +
+  geom_boxplot() + 
+  scale_y_continuous(labels = dollar) +
+  labs(x = "School type", 
+       y = "Out-of-state tuition (USD)", 
+       title = "Elite vs non-elite out-of-state tuition for 777 colleges and universities",
+       caption = "Data from the ISLR2 package (https://cran.rstudio.com/web/packages/ISLR2/index.html)") +
+  theme(
+    panel.background = element_rect(fill = "white", color = "black"),
+    panel.grid = element_blank(),
+    legend.position = "none"
+  )
+```
+
+v) Here, I'll produce histograms to visualize the distribution of the number of students accepted but use different binning schemes for each plot.
+
+```{r}
+library(patchwork)
+
+p1 <- college %>% 
+  ggplot(aes(accept)) +
+  geom_histogram(bins = 10) + 
+  scale_x_continuous(label = label_comma()) +
+  labs(title = "Bins = 10")
+
+p2 <- college %>% 
+  ggplot(aes(accept)) +
+  geom_histogram(bins = 30) +
+  scale_x_continuous(label = label_comma()) +
+  labs(title = "Bins = 30")
+
+p3 <- college %>% 
+  ggplot(aes(accept)) +
+  geom_histogram(bins = 50) +
+  scale_x_continuous(label = label_comma()) +
+  labs(title = "Bins = 50")
+
+p4 <- college %>% 
+  ggplot(aes(accept)) +
+  geom_histogram(bins = 100) +
+  scale_x_continuous(label = label_comma()) +
+  labs(title = "Bins = 100")
+
+p1 + p2 + p3 + p4 +
+  plot_annotation(tag_levels = "A", 
+                  tag_suffix = ")", 
+                  title = "Distribution of the number of accepted students")
+```
+
+iv) Here we're asked to keep exploring the data and report a brief summary of what we find.  I was interested in exploring the distribution of different quantitative variables like the percentage of faculty with Ph.D.'s, the student-to-faculty ratio, the instructional expenditure per student, and the graduation rate in colleges vs universities.  Note, there was some additional data wrangling required as some schools were labeled as abbreviations (e.g., SUNY for State University of New York), or weren't labeled by type (e.g., Rutgers, which is the State University of New Jersey).  I further categorized schools as "Institutes" (e.g., Massachussets Institute of Technology) and schools that could not be categorized as either colleges, universities, or institutes were classified as "Other."
+
+```{r}
+# Classify school type
+college <- college %>% 
+  mutate(type = case_when(
+    str_detect(college, "College|Coll") ~ "college", 
+    str_detect(college, "University|Uni|Univ") ~ "university", 
+    str_detect(college, "Rutgers") ~ "university", 
+    str_detect(college, "SUNY") ~ "university",
+    str_detect(college, "Poly|Institute") ~ "institute", 
+    TRUE ~ "other")) 
+
+# Type vs PhD faculty percentage
+p1 <- college %>% 
+  ggplot(aes(fct_reorder(type, ph_d, .desc = TRUE), ph_d, fill = type)) +
+  geom_boxplot() +
+  geom_hline(yintercept = c(25, 50, 75), 
+             linetype = "dashed", 
+             color = "black", 
+             alpha = 0.5) +
+  labs(x = "School type", 
+       y = "% of faculty with Ph.D.'s", 
+       title = "Education of faculty") +
+  scale_y_continuous(label = label_percent(scale = 1)) +
+  theme(
+    panel.grid = element_blank(),
+    panel.background = element_rect(fill = "white", color = "black"), 
+    legend.position = "none"
+  )
+
+# Student to faculty ratio
+p2 <- college %>% 
+  ggplot(aes(fct_reorder(type, s_f_ratio, .desc = TRUE), s_f_ratio, fill = type)) +
+  geom_boxplot() +
+  geom_hline(yintercept = seq(10, 40, 10), 
+             linetype = "dashed", 
+             alpha = 0.5) +
+  labs(x = "School type", 
+       y = "Ratio", 
+       title = "Student to faculty ratio") +
+  theme(
+    panel.grid = element_blank(),
+    panel.background = element_rect(fill = "white", color = "black"),
+    legend.position = "none"
+  )
+
+# Expenditure per student
+p3 <- college %>% 
+  ggplot(aes(fct_reorder(type, expend, .desc = TRUE), expend, fill = type)) +
+  geom_boxplot() +
+  geom_hline(yintercept = seq(1e4, 5e4, 1e4), 
+             linetype = "dashed", 
+             alpha = 0.5) +
+  scale_y_continuous(label = label_dollar()) +
+  labs(x = "School type", 
+       y = "USD", 
+       title = "Expenditure per student") +
+  theme(
+    panel.grid = element_blank(),
+    panel.background = element_rect(fill = "white", color = "black"),
+    legend.position = "none"
+  )
+
+# Graduation rate
+p4 <- college %>% 
+  ggplot(aes(fct_reorder(type, grad_rate, .desc = TRUE), grad_rate, fill = type)) +
+  geom_boxplot() +
+  geom_hline(yintercept = seq(30, 120, 30), 
+             linetype = "dashed", 
+             alpha = 0.5) +
+  scale_y_continuous(label = label_percent(scale = 1)) +
+  labs(x = "School type", 
+       y = "Graduate rate", 
+       title = "Graduate rate") +
+  theme(
+    panel.grid = element_blank(),
+    panel.background = element_rect(fill = "white", color = "black"),
+    legend.position = "none"
+  )
+
+# Put plots together
+p1 + p2 + p3 + p4 + 
+  plot_annotation(tag_levels = "A", 
+                  tag_suffix = ")")
+```
+
+From these exploratory plots, it was interesting to note that the institutes have the highest median percentage of faculty with Ph.D.'s, and while the distribution was similar for universities and colleges, there was quite a bit of wide distribution with the "other" category.  This category only includes four schools: the Center for Creative Studies (a private art school in Detroit, MI), Milwaukee School of Engineering, The Citadel (also known as The Military College of South Carolina), and Virginia Tech.  It seems plausible that most of the faculty would have Ph.D.'s and each of these schools except the Center for Creative Studies.  Indeed, only 8% of faculty at the latter school have Ph.D.'s.
+
+When we look at the student to faculty ratio, it's quite interesting that across the board, the median value is around the same, but there are some obvious outliers in many different colleges and one university.  Incredibly, one school, the University of Charleston, has a reported student to faculty ratio of just 2.5.  On the other end of the spectrum, Indiana Wesleyan University boasts a reported student to faculty ratio of almost 40.
+
+Comparing the expenditure per student across school types, we can see that in general, institutes spend the highest median amount per student.  According to the reported data, Johns Hopkins University spends the most on each student, a whopping $56,233!  This doesn't seem suprising, given that Johns Hopkins also has a large medical school, which may be disproportionately influencing these data.
+
+Finally, when we compare graduate rates, a very similar story: most have very similar median graduation rates, although there is one school, Cazenovia College, that reported a 118% graduation rate.  This seems like a recording mistake, although perhaps there is more to the story that we don't know from the description of the data alone.  Interestingly at the other end of the spectrum, Texas Southern University only reported a 10% graduation rate.
+
+9) The next set of questions will use the `Auto` data set from the ISLR2 package.  Note, I've removed the records with missing values before proceeding with the analyses.
+
+```{r}
+auto <- Auto %>% 
+  filter(across(everything(), ~ !is.na(.x)))
+
+glimpse(auto)
+```
+
+    a) Using the `glimpse()` function, we can see that the following variables are quantitative: mpg, cylinders, displacement, horsepower, weight, and acceleration, while the remaining variables year, origin, and name are qualitative.  
+    
+    b) The following table displays the range of each quantitative predictor using a custom function which pivots the data frame, splits it by the variable name, and calculates the minimum and maximum value for each variable.
+    
+```{r}
+# Generic function to calculate the min and max for each split data frame
+calc_range <- function(df) {
+  df %>%
+    mutate(min = min(df$value), 
+           max = max(df$value))
+}
+
+# Split data frame and map the function above to each
+auto %>% 
+  select(where(is.numeric) & -c(year, origin)) %>% 
+  pivot_longer(everything(),
+               names_to = "variable",
+               values_to = "value") %>% 
+  split(.$variable) %>% 
+  map(~ calc_range(.)) %>% 
+  bind_rows() %>% 
+  select(-value) %>% 
+  group_by_all() %>% 
+  summarise() %>% 
+  kbl() %>% 
+  kable_classic_2(full_width = FALSE)
+```
+
+c) We can use a similar approah as we did above to calculate the mean and standard deviation of each quantitative variable.
+
+```{r}
+calc_mean_sd <- function(df) {
+  df %>%
+    mutate(mean = round(mean(value)), 
+           sd = round(sd(value)))
+}
+
+auto %>% 
+  select(where(is.numeric) & -c(year, origin)) %>% 
+  pivot_longer(everything(), 
+               names_to = "variable", 
+               values_to = "value") %>% 
+  split(.$variable) %>% 
+  map(~ calc_mean_sd(.)) %>% 
+  bind_rows() %>% 
+  select(-value) %>% 
+  group_by_all() %>% 
+  summarise() %>% 
+  kbl() %>% 
+  kable_classic_2(full_width = FALSE)
+
+  
+```
+
+d) I'm going to skip this question.  
+
+e) This question asks us to investigate the predictors graphically using different methods.
+
+```{r}
+# Set ggplot theme
+my_theme <- theme(
+  panel.grid = element_blank(),
+  panel.background = element_rect(fill = "white", color = "black")
+)
+
+# Split name variable into make and model, then work with just the most abundant vehicles
+auto <- auto %>% 
+  mutate(make = stringi::stri_extract_first(name, regex = "[A-z]{1,}")) 
+
+auto_subset <- auto %>% 
+  group_by(make) %>% 
+  summarise(n = n()) %>% 
+  arrange(desc(TRUE)) %>% 
+  head(n = 5)
+
+# Plot distribution of mpg by make
+p1 <- auto %>% 
+  filter(make %in% auto_subset$make) %>% 
+  ggplot(aes(fct_reorder(make, mpg, .desc = TRUE), mpg, fill = make)) +
+  geom_boxplot() +
+  geom_hline(yintercept = c(20, 30), linetype = "dashed", alpha = 0.5) +
+  labs(x = "Make", 
+       y = "MPG", 
+       title = "Highway mpg by make") +
+  my_theme +
+  theme(legend.position = "none")
+
+# mpg by weight
+p2 <- auto %>% 
+  filter(make %in% auto_subset$make) %>% 
+  ggplot(aes(weight, mpg, color = make)) +
+  geom_point(size = 2) +
+  geom_line() +
+  my_theme +
+  labs(x = "Weight (lbs)", 
+       y = "MPG", 
+       title = "Highway mpg by weight") +
+  scale_color_discrete("Make") +
+  theme(legend.position = "none")
+
+p1 + p2 + 
+  plot_annotation(tag_levels = "A", 
+                  tag_suffix = ")")
+```
+
+f) Based on the plots above and the other variables in the data set, it is plausible that many variables would be useful in predicting highway fuel economy.  From plot A) above, it is clear that not all car models are alike in the distribution of highway fuel economy, and this categorical variable, along with other quantitative variables like weight, displacement, number of cylinders in the engine, etc., should be used in building a statistical model.
+
