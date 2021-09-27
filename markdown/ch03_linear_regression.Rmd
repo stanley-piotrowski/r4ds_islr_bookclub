@@ -1,0 +1,17 @@
+---
+title: 'Chapter 3: Linear Regression'
+author: "Stan Piotrowski"
+date: "`r format(Sys.Date(), '%B %d %Y')`"
+output:
+  pdf_document:
+    toc: true
+---
+
+## Notes
+
+## Exercises
+
+### Conceptual
+
+### Applied
+
