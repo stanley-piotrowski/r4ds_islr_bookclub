@@ -525,3 +525,196 @@ p1 + p2 +
 
 f) Based on the plots above and the other variables in the data set, it is plausible that many variables would be useful in predicting highway fuel economy.  From plot A) above, it is clear that not all car models are alike in the distribution of highway fuel economy, and this categorical variable, along with other quantitative variables like weight, displacement, number of cylinders in the engine, etc., should be used in building a statistical model.
 
+10) The next set of questions use the `Boston` data set.
+
+```{r}
+boston <- Boston
+nrow(boston) # 506
+glimpse(boston)
+```
+
+    a) There are 506 records in the `Boston` data set which describe crime rates, average number of rooms per dwelling, highway accessibility, and other metrics for Boston suburbs.
+    
+    b) This question asks us to make some pairwise scatterplots and comment on our observations.  Here, I'll plot just a handful of plots comparing the weighted mean of distances to employment centers and home prices, and pupil-teacher ratio by town and home prices.
+    
+```{r}
+library(ggbeeswarm)
+
+# Distance to employment center and median home price
+p1 <- boston %>% 
+  ggplot(aes(dis, medv))+
+  geom_point(alpha = 0.5) +
+  geom_smooth(se = FALSE) +
+  scale_y_continuous(label = label_dollar(scale = 1)) +
+  scale_color_manual("Charles River", 
+                     values = c("black", "red")) +
+  labs(x = "Weighted mean of distances", 
+       y = "Home value (thousands, USD)") + 
+  my_theme
+
+# Pupil-teacher ratio by town and home prices
+p2 <- boston %>% 
+  ggplot(aes(ptratio, medv)) + 
+  geom_quasirandom(alpha = 0.5) + 
+  geom_smooth(se = FALSE) + 
+  scale_y_continuous(label = label_dollar(scale = 1)) +
+  labs(x = "Pupil-teacher ratio", 
+       y = "Median home value (thousands USD)") +
+  my_theme
+
+p1 + p2 + 
+  plot_annotation(tag_levels = "A", 
+                  tag_suffix = ")")
+```
+
+In plot A), we can see that interestingly, as the weighted mean of distances to five Boston employment centers increases, so does the median value of the owner-occupied home.  In general, there is quite a bit of variation in the median home value, which suggests that there are other factors contributing to this variable and not just the mean of the distances to employment centers.  In plot B), we can see that, as expected, the homes with the highest value have the lowest pupil-teacher ratio while in general, lower value homes have the highest pupil-teacher ratio.
+
+c) 
+
+d) This question relates to comparing the relationship between the census tracts and crime rates, tax rates, and pupil-teacher ratios.
+
+```{r}
+# Census tract vs crime rate
+p1 <- boston %>% 
+  mutate(chas = ifelse(chas == 0, "otherwise", "tract bounds river")) %>% 
+  ggplot(aes(as.factor(chas), crim)) +
+  geom_boxplot(alpha = 0.5) + 
+  labs(x = "Census tract",
+       y = "Per-capita crime rate by town") + 
+  scale_y_continuous(label = label_percent(scale = 1)) + 
+  my_theme + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Census tract vs tax rates
+p2 <- boston %>% 
+  mutate(chas = ifelse(chas == 0, "otherwise", "tract bounds river")) %>% 
+  ggplot(aes(as.factor(chas), tax)) +
+  geom_boxplot(alpha = 0.5) + 
+  labs(x = "Census tract", 
+       y = "Per-capita tax rate (per thousands USD)") + 
+  scale_y_continuous(label = label_percent(scale = 1)) +
+  my_theme + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Census tract vs pupil-teacher ratios
+p3 <- boston %>% 
+  mutate(chas = ifelse(chas == 0, "otherwise", "tract bounds river")) %>% 
+  ggplot(aes(as.factor(chas), ptratio)) + 
+  geom_boxplot(alpha = 0.5) + 
+  labs(x = "Census tract", 
+       y = "Pupil-teacher ratio") +
+  my_theme + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+p1 + p2 + p3
+```
+
+In plot A), we can see that the median per-capita crime rates are about the same for each class of census tracts, but there are many more outliers in the "otherwise" tract class.  In plot B), we can see that the median per-capita tax rate is slightly higher in the "otherwise" class, and there is considerable more variation in this class as well. Finally, the median pupil-to-teacher ratio is higher in the "otherwise" tract class, although there are two schools with far lower ratios relative to schools in the census tracts that bound the Charles River.
+
+e) There are `r boston %>% filter(chas == 1) %>% nrow()` census tracts in the data set that bound the Charles River.
+
+f) The median pupil-teacher ratio among the towns in the data set is `r median(boston$ptratio)`.
+
+g) The census tract that does not bound the Charles River (coded as "0" in the `Boston` data) has the lowest median value of owner-occupied homes.  Below I've created a series of boxplots to show the distribution of different variables using the shifted logarithm transformation between census tract classes.
+
+```{r}
+boston %>% 
+  group_by(chas) %>% 
+  summarise(median = median(medv))
+
+boston %>% 
+  pivot_longer(-chas,
+               names_to = "variable", 
+               values_to = "value") %>% 
+  mutate(variable = case_when(
+    variable == "crim" ~ "per-capita crime rate", 
+    variable == "dis" ~ "distance to employment center",
+    variable == "indus" ~ "prop. non-retail business acres",
+    variable == "lstat" ~ "lower status of pop. (%)",
+    variable == "medv" ~ "median value of home",
+    variable == "nox" ~ "NO2 concentration (ppm)", 
+    variable == "age" ~ "prop. units built < 1940",
+    variable == "tax" ~ "tax-rate",
+    variable == "ptratio" ~ "pupil-teacher ratio",
+    variable == "rm" ~ "rooms per dwelling",
+    variable == "rad" ~ "access to radial highways",
+    variable == "zn" ~ "prop. res. land zoned > 25K sq. ft.",
+    TRUE ~ variable
+  ), 
+  chas = ifelse(chas == 1, "in bounds Charles River", "otherwise")) %>% 
+  ggplot(aes(fct_reorder(variable, log10(value + 1), .desc = TRUE),
+             log10(value + 1), fill = as.factor(chas))) +
+  geom_boxplot() +
+  geom_hline(yintercept = c(1, 2), 
+             linetype = "dashed", 
+             alpha = 0.5) +
+  labs(x = "", 
+       title = "Census tract data for 506 Boston suburbs") + 
+  my_theme + 
+  theme(legend.position = "top",
+        legend.title = element_blank(),
+        axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+Here are some general comments regarding the distribution of the different variables between two census tract classes: the median tax-rate is higher in the "otherwise" class, and the distribution is much wider; the median proportion of non-retail business acres is lower in the "otherwise" tract; and the median per-capita crime rate is lower in the "otherwise" class, although there are notable exceptions that are much higher.
+
+h) Below is a table presenting the number of census tracts with greater than seven and eight rooms per dwelling per census tract type.
+
+```{r}
+boston %>% 
+  mutate(class = case_when(
+    rm > 8 ~ "greater_than_8",
+    between(rm, 7, 8) ~ "greater_than_7",
+    TRUE ~ "neither")
+  ) %>% 
+  filter(class != "neither") %>% 
+  group_by(class, chas) %>% 
+  summarise(n = n()) %>% 
+  pivot_wider(id_cols = chas, 
+              names_from = "class", 
+              values_from = "n") %>% 
+  mutate(chas = ifelse(chas == 1, "in bounds Charles River", "otherwise")) %>% 
+  kbl() %>% 
+  kable_classic_2(full_width = FALSE)
+```
+
+Below is a plot similar to the one produced for g) but only interrogating census tracts with an average number of rooms per dwelling greater than eight.
+
+```{r}
+boston %>% 
+  filter(rm > 8) %>% 
+  pivot_longer(-chas,
+               names_to = "variable", 
+               values_to = "value") %>% 
+  mutate(variable = case_when(
+    variable == "crim" ~ "per-capita crime rate", 
+    variable == "dis" ~ "distance to employment center",
+    variable == "indus" ~ "prop. non-retail business acres",
+    variable == "lstat" ~ "lower status of pop. (%)",
+    variable == "medv" ~ "median value of home",
+    variable == "nox" ~ "NO2 concentration (ppm)", 
+    variable == "age" ~ "prop. units built < 1940",
+    variable == "tax" ~ "tax-rate",
+    variable == "ptratio" ~ "pupil-teacher ratio",
+    variable == "rm" ~ "rooms per dwelling",
+    variable == "rad" ~ "access to radial highways",
+    variable == "zn" ~ "prop. res. land zoned > 25K sq. ft.",
+    TRUE ~ variable
+  ), 
+  chas = ifelse(chas == 1, "in bounds Charles River", "otherwise")) %>% 
+  ggplot(aes(fct_reorder(variable, log10(value + 1), .desc = TRUE),
+             log10(value + 1), fill = as.factor(chas))) +
+  geom_boxplot() +
+  geom_hline(yintercept = c(1, 2), 
+             linetype = "dashed", 
+             alpha = 0.5) +
+  labs(x = "", 
+       title = "Census tract data for records with mean rooms per dwelling > 8") + 
+  my_theme + 
+  theme(legend.position = "top",
+        legend.title = element_blank(),
+        axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+In general, he median tax-rates, access to radial highways, and per-capita crime rates are higher for "in bounds" tracts.
+
