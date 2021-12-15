@@ -7,11 +7,1194 @@ output:
     toc: true
 ---
 
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+```
+
+```{r load libraries}
+library(pacman)
+pacman::p_load(tidyverse, ISLR2, kableExtra, patchwork)
+
+# Download the advertising data
+url <- "https://www.statlearning.com/s/Advertising.csv"
+download.file(url, destfile = "../data/Advertising.csv")
+
+# Load adveritising data and modify column names
+advertising <- read_csv("../data/Advertising.csv") %>% 
+  dplyr::rename("ID" = 1)
+```
+
 ## Notes
+
+Simple linear regression:
+
+* The basic idea is to estimate model coefficients using the training data, then make predictions about future observations using those estimated coefficients.
+* We can estimate the coefficients by fitting it to a curve (in this case, a straight line) and evaluate how "close" the line is to the data.
+* Here, we'll use the least squares method, or fitting the line that minimizes the sum of the squared differences between each observation and the fitted value.
+* The residual sums of squares (RSS) is the value that we use to evaluate errors between the predicted and observed values.
+* The population line is the true relationship (which is typically unknown to us except in cases with simulated data); the least squares line is what's estimated using the model coefficients.
+* Below, I'm going to re-create a figure similar to Figure 3.3 in the textbook, where instead of using the adveritising data, I'll use the `mtcars` data set.  I'll subset parts of the data, fit the regression line, then overlay them all in the same plot with the estimated least squares line using all the data.
+
+```{r mtcars multiple lines example}
+# Randomly sample from the mtcars data set without replacement
+mtcars <- mtcars %>% rownames_to_column("make_model")
+mtcars_list <- vector("list", length = 20L)
+names(mtcars_list) <- paste0("sample", 1:20)
+
+# Iterate over the list, sample,create a nested data frame, then apply the model
+nested_mtcars_samp <- map(mtcars_list, function(x) {
+  idx <- sample(1:nrow(mtcars), size = 20, replace = FALSE)
+  mtcars[idx, ]}) %>% 
+  bind_rows(.id = "sample") %>% 
+  group_by(sample) %>% 
+  nest() %>% 
+  mutate(model = map(data, ~ lm(mpg ~ wt, data = .x)), 
+         coeffs = map(model, ~ broom::tidy(.x)))
+
+# Build model using all data
+mtcars_full <- lm(mpg ~ wt, data = mtcars)
+mtcars_full_coeffs <- broom::tidy(mtcars_full) %>% 
+  dplyr::select(term, estimate) %>% 
+  pivot_wider(names_from = "term", values_from = "estimate")
+
+# Create plot with the least squares curve for all data and all sub-samples
+sample_estimates <- nested_mtcars_samp %>% 
+  unnest(cols = coeffs) %>% 
+  dplyr::select(-c(data, model)) %>% 
+  dplyr::select(sample, term, estimate) %>% 
+  pivot_wider(names_from = "term", values_from = "estimate")
+
+mtcars %>% 
+  ggplot(aes(wt, mpg)) + 
+  geom_point() + 
+  geom_abline(aes(intercept = sample_estimates$`(Intercept)`, slope = sample_estimates$wt), 
+              data = sample_estimates, color = "lightskyblue", alpha = 0.75) +
+  geom_abline(aes(intercept = mtcars_full_coeffs$`(Intercept)`, slope = mtcars_full_coeffs$wt), 
+              data = mtcars_full_coeffs, color = "blue", size = 2) + 
+  labs(x = "Weight (1,000 lbs)", 
+       y = "MPG miles/US gallons", 
+       title = "Relationship between weight and fuel efficiency with samples of mtcars", 
+       subtitle = "Least squares curve with full data set shown in dark blue;<br>least squares curves with different samples of mtcars shown in light blue") + 
+  theme(plot.subtitle = ggtext::element_markdown())
+
+```
+
+* The above plot shows that using different subsets of the data produces different estimates for the true underlying relationship between vehicle weight and fuel efficiency (which, in this case, is unknown to us). 
+* It's important to note the difference between unbiased and biased estimators-- estimates of the population parameter(s) from the latter type will not systematically be different than the true parameter value.  That is, although the best fit lines for the different samples of the mtcars data aren't exactly matching the estimate using the full data set, if we average them all together, they will be pretty close.  We can confirm that below:
+
+```{r average sample model estimates}
+sample_estimates %>% 
+  ungroup() %>% 
+  summarise(`(Intercept)` = mean(`(Intercept)`), 
+            wt = mean(wt)) %>% 
+  mutate(type = "sample") %>% 
+  bind_rows(mtcars_full_coeffs %>% mutate(type = "full"))
+
+```
+
+* We can see that the estimates using the full data set and the mean estimates from all of the different samples of the data are very similar- this highlights how least squares coefficient estimates are unbiased estimators-- they do not systematically over- or under-estimate.  
+* It's also important to consider the standard error of the coefficient estimates-- that is, the average amount that the estimates differ from the true population parameter.  We can compute the standard error by squaring the standard deviation and dividing that quantity by the sample size.
+* This is also important to note-- in general, because of this equation, larger sample sizes will generally produce smaller standard errors than smaller sample sizes.
+* Let's look at the standard errors for the slope estimates for the different samples.
+
+```{r comparing standard errors}
+plot_input <- nested_mtcars_samp %>% 
+  dplyr::select(sample, coeffs) %>% 
+  unnest(coeffs) %>% 
+  mutate(sample = as.numeric(gsub("sample", "", sample)))
+
+mtcars_full_std_errors <- broom::tidy(mtcars_full) %>% 
+  dplyr::select(term, std.error)
+
+plot_input %>% 
+  ggplot(aes(sample, std.error)) + 
+  geom_col(position = "dodge", alpha = 0.5) +
+  geom_hline(aes(yintercept = mean(std.error)), 
+             data = plot_input %>% dplyr::filter(term == "(Intercept)"), 
+             linetype = "dashed", color = "blue") +
+  geom_hline(aes(yintercept = mean(std.error)), 
+             data = plot_input %>% dplyr::filter(term == "wt"), 
+             linetype = "dashed", color = "blue") +
+  geom_hline(aes(yintercept = std.error), data = mtcars_full_std_errors, 
+             linetype = "dashed", color = "red") + 
+  scale_x_continuous(breaks = seq(1, 20), labels = seq(1, 20)) + 
+  facet_wrap(~term) + 
+  theme(legend.position = "none") + 
+  labs(x = "Sample", y = "Standard error of coefficient", 
+       title = "Avering standard errors over samples approaches estimates with full data set", 
+       subtitle = "Mean standard errors for different samples are presented as blue dashed lines<br>
+       Mean standard errors for full data set presented as red dashed lines") + 
+  theme(plot.subtitle = ggtext::element_markdown())
+```
+
+* The residual standard error (RSE) is the square root of the RSS divided by the value of n - 2-- the RSE is the standard deviation estimated from the data.
+* Confidence intervals describe how if we repeated an experiment 100 times, 95 of the intervals would contain the true population parameter.  
+* The RSE is essentially the standard deviation of the error, or on average, how much the observations deviate from the fitted value (RSS divided by n - 2).
+* We can view the model summary for the mtcars full data set below:
+
+```{r mtcars model summary}
+summary(mtcars_full)
+```
+
+* The RSE for this model is 3.046 on 30 degrees of freedom-- this means that on average, we can expect that the fuel efficiency will deviate from the fitted value (i.e., the regression line) by about 3 units.
+* The RSE is one way we can evaluate the model fit-- if the RSE is quite large, we could conclude that the model doesn't fit the data well (whether that's due to a few outliers is another topic).
+* The R^2 statistic accounts for the variability in the response that is explained by the regression-- in the mtcars model, we can see that weight explains about 75% of the variability in fuel efficiency, with 25% not accounted for by the model.
+* It's important to note how R^2 is calculated-- 1 - RSS/TSS, where TSS is the total sums of squares, or simply the total variability in the response before any regression is performed.
+* To calculate TSS, we simply add up all of the squared differences between each observation and the mean response.  
+* The remaining 25% of variability in the response that's not accounted for in the mtcars model could be due to other variables that are not accounted for in the model, a poor linear fit, etc.
+
+Multiple linear regression:
+
+* When building multiple linear regression models, we interpret each of the beta coefficients as the average effect on the response with a one unit increase in the predictor, holding all other predictors constant.
+* To illustrate multiple linear regression, we'll model the effects of weight, number of cylinders, and displacement on the fuel efficiency.
+
+```{r mtcars multiple linear regression}
+mtcars_mlr <- lm(mpg ~ wt + cyl + disp, data = mtcars)
+summary(mtcars_mlr)
+```
+
+* The F-statistic here is 46.42, which is much greater than 1, indicating that at least one of the predictors is significantly different from zero.
+* The F-statistic equation is in the textbook and I won't review it here-- but essentially, it takes into account the TSS (the total variability in the model), the RSS (that is, the difference between each observation and the fitted value), and the sample size and number of predictors in the model.
+* The numerator degrees of freedom for the F-statistic is p, or the number of predictors (in this case, 3); the denominator degrees of freedom is n - p - 1, or `r 32-3-1`.  We can use the `rf()` function to sample random variables from the F-distribution with these degrees of freedom and see where our F-statistic falls in that distribution.
+
+
+```{r simulate F-distribution}
+# Draw 1000 random variables from an F-distribution
+data.frame(sample = 1:1000, 
+           f_rand = rf(1000, 3, 28)) %>%
+  ggplot(aes(f_rand)) + 
+  geom_density(fill = "lightskyblue") + 
+  geom_vline(xintercept = 46.42, linetype = "dashed") + 
+  labs(x = "Simulated F-statistic", 
+       y = "Density", 
+       title = "Comparing multiple linear regression F-statistic with simulated data", 
+       subtitle = "1,000 simulated F-statistics were sampled from an F-distribution with 3 and 28 degrees of freedom") + 
+  scale_y_continuous(expand = c(0, 0))
+
+```
+
+* From the plot above, we can see that an F-statistic of ~46 is substantially different from what we would expect to see from drawing random variables from an F-distribution with the same degrees of freedom as in our multiple linear regression model.
+* We can also see that the statistical significance of the F-statistic is heavily impacted by the sample size.  To see this, we can simulate p-values for F-statistics with different denominator degrees of freedom (which includes the sample sizes) below:
+
+```{r simulate F-statistic p-values} 
+map(seq(10, 100, 10), ~ pf(3, 3, .x, lower.tail = FALSE)) %>% 
+  unlist() %>% 
+  data.frame() %>% 
+  dplyr::rename("p-value" = 1) %>% 
+  mutate("Sample size" = seq(10, 100, 10)) %>% 
+  kbl(caption = "P-values simulated from F-distributions with different sample sizes") %>% 
+  kable_classic_2()
+```
+
+* We can see from this exercise that the sample size (in the denominator degrees of freedom) influences the p-value when the numerator degrees of freedom and the F-statistic are held constant.
+* Variable selection is an important topic in multiple linear regression-- there are 2^p models that can be constructed from p predictors; in the example of the mtcars model with 3 predictors, there are 8 possible models (e.g., intercept only, `wt` only, etc.).
+* Forward selection (starting with the intercept-only model), backward selection (starting with all variables), and mixed selection (starting with the intercept-only model and moving forwards and backwards until some stopping point) can all be used to evaluate multiple linear regression models.
+* We can create an example of forward selection using the mtcars data below:
+
+```{r variable selection with mtcars}
+full_model <- lm(mpg ~ ., data = mtcars %>% dplyr::select(-make_model))
+step_full <- MASS::stepAIC(full_model)
+step_full
+```
+
+* Using forward and backward selection, the optimal model (determined by the lowest overall AIC) includes the effect of `wt`, `qsec` (1/4 mile time), and `am` (automatic vs manual transmission) on the fuel efficiency.
+* Because adding variables to the model always reduces the residual sums of squares, which is what the R^2 statistic is computed with, adding additional variables will always increase the amount of variance explained by the model.
+* Prediction intervals are wider than confidence intervals because we need to account for the irreducible error associated with random variation when predicting a single response.  
+
+Other considerations in the regression model:
+
+* There may be situations where you want to model a quantitative variable and a qualitative variable together-- for instance, using the `Credit` data from the `ISLR2` package, we may wante to model the effects of student status and income on credit card balance.  To do this, we'll create a dummy variable for student status; 0 for non-students, and 1 for students.
+
+```{r dummy variable credit example}
+# Add dummy variable for student status
+credit_v2 <- Credit %>% 
+  mutate(dummy_student = ifelse(Student == "Yes", 1, 0))
+
+# Create the linear model and look at the output
+summary(lm(Balance ~ Income + dummy_student, data = credit_v2))
+```
+
+* From the model output above, we can see from the F-statistic that at least one of the variables is significantly different from zero.  Looking at the individual coefficients, we can also see that the dummy student variable is significant-- when we want to interpret the output, we could conclude that on average, a person has a credit card balance of 211 USD, holding other factors constant, and students have, on average, approximately 382 USD more debt than non-students, hold income constant.
+* There are two important assumptions of the linear model-- additivity, meaning we assume that the association between X and Y doesn't depend on the other predictors, that the effect is constantly additive; and linearity, meaning the estimate of the average change in Y for one unit change in X is constant.
+* Adding an interaction term relaxes the additivity assumption- we can show this and use an interaction term to the credit model we just created (e.g., association between the interaction of income and student status).
+
+```{r interaction term example}
+# Create model with interaction between income and student status
+summary(lm(Balance ~ Income + dummy_student + Income*dummy_student, data = credit_v2))
+
+```
+
+* Interestingly, there's no evidence that the coefficient for the interaction is statistically different from zero, but this was a useful exercise nonetheless.
+* Let's try another combination of variables to build a linear model with an interaction term.
+
+```{r interaction term example #2}
+summary(lm(Balance ~ Income + Rating + Income*Rating, data = credit_v2))
+
+```
+
+* Here, we can see that (not surprisingly), income and credit rating are both significant predictors of credit card balance on their own.  Specifically, a 1 unit increase in income is associated with a 9.63 unit decrease in credit card balance (ignoring the intercept term).  Similarly, a 1 unit increase in in credit rating is associated with a 3.795 increase in credit card balance, which makes sense- if you have a better credit rating, you can borrow more money.  We can also see the coefficient of the interaction term is significantly different from zero.
+* Here is the equation: $Balance = \beta_0 + \beta_1*Income + \beta_2*Rating + \beta_3(Income*Rating)$
+* We can re-write this as: $Balance = \beta_0 + (\beta_1 + \beta_3*Rating)*Income + \beta_2*Rating$
+* Finally, putting this together with the coefficients: $Balance = -4.619e^{-2}+ (-9.603 + 3.394e^{-3}*Rating)*Income + 3.795*Rating$
+* We'll interpret the above equation as "a one unit increase in income will decrease the credit card balance by $-9.59906*Rating$ units, showing the interaction between income and credit rating.  We could conclude from the above summary output that the true relationship is not additive.  As an additional check, the adjusted R-squared for the model above is 0.8767, which is greater than the estimate for the model with the main effects only (i.e., the model not including the interaction term; 0.8745, not shown).
+* We can take this one step further and state that approximately 1.28% of the variability in credit card balance that remains after fitting the additive model only has been explained by the inclusion of the interaction term.
+* We can reproduce the output from the textbook using the following code with theh advertising data:
+
+```{r mlr advertising model}
+summary(lm(sales ~ TV + radio + TV*radio, data = adveritising))
+
+```
+
+* When you are looking at main effects with one quantitative variable and one qualitative variable, the lines derived from the model will be parallel because the only thing that differs is the inclusion of two constants: an intercept and the coefficient for the qualitative variable; if an interaction term is included, then the lines will have different slopes. We can show the model results in a scatter plot with the regression lines for the model with the interaction term in the credit data set.
+
+```{r credit mlr interaction plot}
+Credit %>% 
+  ggplot(aes(Income, Balance)) + 
+  geom_point(alpha = 0.5) +
+  geom_abline(intercept = 200.6232, slope = 6.2182, size = 2) + 
+  geom_abline(intercept = 200.6232 + 476.6758, slope = (6.2182 + -1.9992), 
+              color = "red", size = 2)
+
+```
+
+* Polynomial regressions can be used to model quadratic relationships, but the interpretation of such models can become unruly quite quickly when higher order polynomial terms are used.
+
+Identifying potential problems:
+
+* A linear regression model assumes a straight-line relationship between the predictors and response-- to check this, we can plot the fitted values and residuals, where ideally the residuals should cluster around 0; if there are systematic problems where the model over- or underestimates the average response, this could be a sign that there's not a straight-line relationship.
+* We can create such a plot looking at the credit card data.
+
+```{r fitted vs residuals plot}
+fitted_residuals <- data.frame(residuals = residuals(lm(Balance ~ Income, data = Credit)), 
+           fitted = fitted(lm(Balance ~ Income, data = Credit))) 
+  
+fitted_residuals %>% 
+  ggplot(aes(fitted, residuals)) + 
+  geom_point(alpha = 0.5) + 
+  geom_hline(yintercept = 0, linetype = "dashed") + 
+  geom_smooth(se = FALSE) 
+
+
+```
+
+* From this plot, we can see that when we plot the residuals against the fitted values, in general, the smoothed curve is around 0.
+* Although, it's important to note that there are certainly instances where the model overestimates and underestimates fitted values.  Residuals are calculated by subtracting the fitted value from the observed value; thus, positive residuals indicate observed values > fitted, or an underestimate; negative residuals indicate observed values < fitted, or an overestimate.
+* It's also important to note here that there is considerable variability in the model and there are some very high residuals, which is indicated by the relatively low R-squared value from the model (~0.2), meaning there are other variables that are important to consider besides just income.
+* One very important assumption to keep in mind in regression is that the standard errors of the coefficients are assumed to be uncorrelated.
+* If the error terms are correlated (meaning, for example, the first error term gives you information about the second, etc), confidence and prediction intervals will be biased and be narrower than they should be and p-values will be smaller than they should be.
+* Another important assumption is homoskedasticity, or the constant variance in the error term (residuals) over the range of fitted values.
+* When dealing with outliers, it may be worthwhile to remove potential outliers and check the residual standard error (RSE), which is the square root of the residual sums of squares divided by the quantity of the sample size minus the number of parameters minus 1 (n - p -1).
+* In other words, the RSE is a description of how far off the model is from the true value, on average.
+* Studentized residuals are the residuals divided by their standard errors-- it allows us to quickly identify outliers, which generally have studentized residuals > 3 or < -3.  We can see this in the plot below.
+
+```{r}
+# Calculate studentized residuals
+stud_resid <- data.frame(stud_resid = MASS::studres(mod1), 
+                         fit = fitted(mod1))
+
+stud_resid %>% 
+  ggplot(aes(fit, stud_resid)) + 
+  geom_point() + 
+  geom_hline(yintercept = c(-3, 3), linetype = "dashed", color = "red")
+```
+
+* Another important statistic to consider is leverage, which is an unusual value in one of the predictors.  In simple linear regression, the leverage statistic increases with increasing distance between the observed value and the mean for a predictor.  In multiple linear regression, if an observation has a particularly unusual set of values for a set of predictors, the leverage statistic will be greater than the mean (p + 1)/n, and may be worth investigating because it may heavily influence the regression line.
+* Collinearity is also another problem that needs to be addressed, because it can be difficult to evaluate how each collinear predictor influences the response.  Below, we've used an example from the textbook, which is quite intuitive-- generally speaking, as your credit rating increases, so does your credit limit.
+
+```{r collinearity example}
+# Plot a few values
+p1 <- Credit %>% ggplot(aes(Limit, Age)) + geom_point()
+p2 <- Credit %>% ggplot(aes(Limit, Rating)) + geom_point()
+patchwork::wrap_plots(p1, p2)
+```
+
+* For only two variables, looking at a correlation matrix may identify collinearity, but for three or more variables (multicollinearity), it is better to look at the variance inflating factor (VIF).  The VIF statistic looks at the R-squared of the full model, with all variables included, divided by the R-squared of the model fit with just that predictor.  If the VIF is 1, that indicates a complete absence of collinearity; any VIF above 5 or 10 is evidence of multicollinearity and needs to be addressed.  
+* We can investigate multicollinearity using the `car` package and the credit card data set.
+
+```{r multicollinearity}
+mod1 <- lm(Balance ~ Limit + Age + Rating, data = Credit)
+car::vif(mod1)
+
+```
+
+* In practice, VIF is interpreted as the amount of variance in the model that's due to multicollinearity among its features, relative to one with no multicollinearity.  
+
+Comparison of linear regression with K-nearest neighbors:
+
+* Parametric methods, like ordinary least squares regression, are relatively simple to build because they assume a specified form of the function between the predictor(s) and the response.  
+* In contrast, non-parametric methods relax the assumption of a specific functional form, and are typically much more flexible-- for example, if prediction accuracy is the ultimate goal and not necessarily interpretability, it may be better to choose a non-parametric model to fit to the data.
+* K-nearest neighbors (KNN) regression is used by building on the KNN classifier from Chapter 2-- it estimates the functional form of the prediction point based on the K nearest neighbors.
+* Recall-- bias is difference between the average response (i.e., the fitted value) and the observation in the training data; models that have high bias generally oversimplify the relationship between the predictor(s) and the response.  Relatively simple models like ordinary least squares regression may have higher bias than models that include cubic splines, for example, because they oversimplify the relationship.
+* Recall-- variance is essentially the variability in predictions when the model is presented with new data.  Models that pay very close attention to training data may have low bias, but they may not generalize well and may perform poorly on new observations.  
+* In general, parametric methods (e.g., linear regression) will out-compete non-parametric methods (e.g., KNN regression) when the parametric form is close to the true form of the function that describes the relationship between the predictor(s) and the response.  
+* Generally, there's a cost in variance with non-parametric methods, but a reduction in bias.  
+
+
+## Lab: Linear Regression
+
+### Simple linear regression
+
+Below is some code adapted from the textbook using `ggplot2`. 
+
+```{r Boston linear regression}
+# Build linear regression model between median value of owner-occupied homes and lower status of the population
+lm_fit <- lm(medv ~ lstat, data = Boston)
+
+# Plot linear regression line with the data
+Boston %>% 
+  ggplot(aes(medv, lstat)) + 
+  geom_point() + 
+  geom_abline(intercept = lm_fit$coefficients[1], 
+              slope = lm_fit$coefficients[2], color = "blue")
+
+# Create predictions for a range of values, calculate the confidence interval, and the prediction interval
+predictions <- data.frame(predict(lm_fit, data.frame(lstat = seq(min(Boston$medv), max(Boston$medv), 1)), interval = "confidence"))
+conf_int_predictions <- data.frame(predict(lm_fit, data.frame(lstat = predictions$fit), interval = "prediction"))
+
+# Calculate residuals and look at the plot
+res_plot <- data.frame(resid = residuals(lm_fit), fit = fitted(lm_fit)) %>% 
+  ggplot(aes(fit, resid)) + 
+  geom_point() + 
+  geom_smooth(se = FALSE) + 
+  geom_hline(yintercept = 0, linetype = "dashed") + 
+  labs(x = "Fitted values", 
+       y = "Residuals", 
+       title = "Residuals show some non-linearity")
+
+# Calculate studentized residuals 
+stud_resid_plot <- data.frame(stud_resid = MASS::studres(lm_fit), fit = fitted(lm_fit)) %>% 
+  ggplot(aes(fit, stud_resid)) + 
+  geom_point(alpha = 0.5) + 
+  geom_hline(yintercept = c(-3, 0, 3), linetype = "dashed", color = c("red", "black", "red")) + 
+  labs(x = "Fitted values", 
+       y = "Studentized residuals", 
+       title = "Studentized residuals show outliers")
+
+# Plot hat values and studentized residuals
+leverage_plot <- data.frame(hat_values = hatvalues(lm_fit), stud_resid = MASS::studres(lm_fit)) %>% 
+  mutate(high_leverage = hat_values > 2 / nrow(Boston)) %>% 
+  ggplot(aes(hat_values, stud_resid, color = high_leverage)) + 
+  geom_point(alpha = 0.5) + 
+  geom_hline(yintercept = c(-3, 0, 3), linetype = "dashed", color = "black") + 
+  geom_vline(xintercept = 2 / nrow(Boston), linetype = "dashed") +
+  scale_color_manual(values = c("black", "red")) + 
+  labs(x = "Leverage" , y = "Studentized residuals", 
+       title = "High leverage values") + 
+  theme(legend.position = "none")
+
+patchwork::wrap_plots(res_plot, stud_resid_plot, leverage_plot, nrow = 2)
+```
+Using the diagnostic plots above, we can see that: 1) the residuals show some non-linearity in the association between the predictor and response; 2) there are certainly some outliers in the plot of the fitted values of the model and the studentized residuals; 3) there are many values of the predictor that have high leverage and will therefore likely have substantial impacts on the regression coefficients.  
+
+Let's remove those high leverage values of the predictor and see how the regression estimates change.
+
+```{r Boston leverage plots}
+# Remove values of the predictor with leverage values > mean leverage
+(mean_leverage <- 2 / nrow(Boston)) # ~ 0.004
+hat_values <- data.frame(hat_values = hatvalues(lm_fit)) %>% 
+  rownames_to_column("index")
+
+boston_filtered <- Boston %>% 
+  rownames_to_column("index") %>% 
+  left_join(hat_values, by = "index") %>% 
+  dplyr::filter(hat_values < mean_leverage)
+
+# Re-fit the model and compare output
+lm_fit_v2 <- lm(medv ~ lstat, data = boston_filtered)
+summary(lm_fit)$r.squared # 0.544
+summary(lm_fit_v2)$r.squared # 0.36
+```
+
+### Multiple linear regression
+
+We can fit a model to evaluate the effects of the lower status of the population (`lstat`) and proportion of owner-occupied units built prior to 1940 (`age`) on the median value of owner-occupied homes (`medv`). 
+
+```{r Boston multiple linear regression v2}
+boston_mlr <- lm(medv ~ lstat + age, data = Boston)
+summary(boston_mlr)
+
+# Fit a model with all of the variables
+boston_mlr_full <- lm(medv ~ ., data = Boston)
+summary(boston_mlr_full) %>% 
+  broom::tidy() %>% 
+  dplyr::filter(p.value < 0.05) # 11 are significant, including the intercept
+
+# Look at the variance inflation factor
+car::vif(boston_mlr_full) # all are relatively low 
+
+# Run with all except age, which has a high p-value
+summary(lm(medv ~ . - age, data = Boston))
+
+# Or, use the update() function
+summary(update(boston_mlr_full, ~ . - age))
+```
+
+Now, we can fit a model with an interaction term.
+
+```{r}
+summary(lm(medv ~ lstat + I(lstat^2), data = Boston)) # adjusted R-squared == 0.6393
+summary(lm(medv ~ lstat, data = Boston)) # Adjusted R-squared == 0.5342
+
+# Run an ANOVA to look at the difference in the two models
+anova(lm(medv ~ lstat, data = Boston), 
+      lm(medv ~ lstat + I(lstat^2), data = Boston))
+```
+
+Other transformations can be applied as well, including higher-order polynomials using the `poly()` function and log-transformations.
+
+### Qualitative predictors
+
+Now we'll work with the car seats data set.
+
+```{r car seats model 1}
+# Fit a model with interactions between income and advertising and price and age
+lm_fit <- lm(Sales ~ . + Income:Advertising + Price:Age, data = Carseats)
+summary(lm_fit) %>% 
+  broom::tidy() %>% 
+  filter(p.value < 0.05)
+
+# Check to see how R codes the qualitative variables
+contrasts(Carseats$ShelveLoc)
+```
 
 ## Exercises
 
 ### Conceptual
 
+1) Describe the null hypotheses corresponding to the p-values in the model output of the `advertising` data below.
+
+```{r conceptual ex 1}
+# Build the model 
+lm_fit <- lm(sales ~ . - ID, data = advertising)
+summary(lm_fit)
+```
+
+The model output above shows that both `TV` and `radio` have an influence on `sales`, while `newspaper` does not.  These variables explain nearly 90% of the variability in `sales`.  In terms of the coefficients, the probability that we would observe test statistics for `TV` and `radio` as large or larger than the ones we observed if the null hypothesis were true is extremely low (p-value <2e-16).
+
+2) The differences between the KNN classifier and the KNN regression methods is the former simply aims to classify observations into 1 of K distinct classes, while the latter attemps to describe the functional form of the association between the set of predictors and the response in $p$ dimensions.  In KNN classification, we are just interested in assigning an observation to a given class based on the class of its K nearest neighbors.  In the KNN regression setting, we are estimating the functional form of the association between the predictor(s) and response by averaging over K nearest neighbors.  In both the KNN classifier and regression settings, lower values of K (e.g., 1) are the most flexible, as they only consider either the class membership or value of 1 neighbor.  Increasing values of K leads to a smoother fit, which generally increases training bias while reducing variance in the test data.
+
+3) Considering the following model coefficients:
+
+$Salary = \beta_0=50, \beta_1=20, \beta_2=0.7, \beta_3=35, \beta_4=0.01, \beta_5 = -10$
+
+Where the terms are the intercept, GPA, IQ, level (college = 1, high school = 0), interaction between GPA and IQ, and interaction between GPA and level.  We can write out the equation like this: 
+
+$Salary = \beta_0 + \beta_1*GPA + \beta_2*IQ + \beta_3*Level + \beta_4(GPA*IQ) + \beta_5(GPA*Level)$
+
+And if we were interested in writing the equation for a college student, for example: 
+
+$Salary = \beta_0 + (\beta_1 + \beta_4)*IQ + (\beta_3 + \beta_5)*GPA + \beta_2*IQ$
+
+We can predict the salary of a college student with an IQ of 110 and a GPA of 4.0:
+
+$Salary = \beta_0 + (\beta_1 + \beta_4)*IQ + (\beta_3 + \beta_5)*GPA + \beta_2*IQ$
+$Salary = 50 + (20 + 0.01)*110 + (35 + -10)*4.0 + 0.7*110 = 2228$
+
+Although the coefficient for the interaction effect of GPA and IQ is relatively small, that doesn't necessarily mean that the result is unlikely to be significant.  The p-value and confidence intervals of a test statistic are influenced by the sample size-- in holding everything else constant, larger sample sizes will generally produce standard errors of test statistics that are smaller relative to smaller sample sizes.  Thus, there still can be an interaction effect of GPA and IQ that is statistically different from zero and unlikely to be seen simply due to chance, if the sample size is large enough to detect such a difference.
+
 ### Applied
 
+1) Using the `Auto` dataset:
+
+```{r applied ex 1}
+# Fit the model of mpg as the response and horsepower as the predictor
+auto_mod <- lm(mpg ~ horsepower, data = Auto)
+summary(auto_mod)
+```
+
+Looking at the model output above, there is a strong influence of `horsepower` on `mpg` (p-value < 0.0001).  In fact, just using this single predictor explains over 60% of the variation in `mpg`.  As expected, the relationship between `horsepower` and `mpg` is negative-- as `horsepower` increases, the average `mpg` predicted by the model decreases.  Below is the code to generate 95% confidence and prediction intervals for a the `mpg` of a vehicle with 98 horsepower.  
+
+```{r}
+map(c("predict", "confidence"), ~ predict(auto_mod, newdata = data.frame(horsepower = 98), interval = .x) %>% 
+      data.frame() %>% 
+      mutate(type = .x)) %>% 
+  bind_rows()
+```
+
+The predicted `mpg` is approximately 24, with the confidence interval spanning approximately 24 to 25 and the prediction interval, accounting for random variation, spanning from 15 to 34.  Below is the scatterplot of the response and the predictor.
+
+```{r}
+Auto %>% 
+  ggplot(aes(horsepower, mpg)) + 
+  geom_point(alpha = 0.5) + 
+  geom_abline(intercept = auto_mod$coefficients[1], 
+              slope = auto_mod$coefficients[2], 
+              linetype = "dashed", color = "blue")
+```
+
+Create diagnostic plots including the fitted values against the residuals, fitted values against the studentized residuals, and the fitted values against the hat values (leverage).
+
+```{r}
+auto_diagnostics <- data.frame(fit = fitted(auto_mod), 
+                               resid = residuals(auto_mod), 
+                               stud_resid = MASS::studres(auto_mod), 
+                               hat_vals = hatvalues(auto_mod))
+p1 <- auto_diagnostics %>% 
+  ggplot(aes(fit, resid)) + 
+  geom_point(alpha = 0.5) + 
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_smooth(se = FALSE) + 
+  labs(x = "Fitted values", y = "Residuals")
+
+p2 <- auto_diagnostics %>% 
+  ggplot(aes(fit, stud_resid)) + 
+  geom_point(alpha = 0.5) + 
+  geom_hline(yintercept = c(0, -3, 3), linetype = "dashed", 
+             color = c("black", "red", "red")) + 
+  geom_smooth(se = FALSE) + 
+  labs(x = "Fitted values", y = "Studentized residuals")
+
+p3 <- auto_diagnostics %>% 
+  ggplot(aes(hat_vals, stud_resid)) + 
+  geom_point(alpha = 0.5) + 
+  geom_hline(yintercept = c(0, -3, 3), linetype = "dashed", 
+             color = c("black", "red", "red")) + 
+  geom_vline(xintercept = 2 / nrow(Auto), linetype = "dashed") + 
+  labs(x = "Hat values", y = "Studentized residuals")
+
+patchwork::wrap_plots(p1, p2, p3, nrow = 2)
+```
+
+Based on the diagnostic plots above, there appears to be some problems with the fit of a straight-line association of `mpg` and `horsepower`.  In particular, at lower fitted values, the model tends to under-estimate the average response, while at higher values; at mid-range values of the predictor, the model tends to over-estimate the average response; and finally, at higher values of the predictor, the model tends to under-estimate the average response.  This suggests a squared or higher-order polynomial term may improve model fit.  Let's try this:
+
+```{r}
+# Build the full model with a squared term
+auto_squared <- lm(mpg ~ horsepower + I(horsepower^2), data = Auto)
+summary(auto_mod) # R-squared = 0.6059
+summary(auto_squared) # R-squeared = 0.6876
+
+# Compare the full and reduced model with an ANOVA
+anova(auto_mod, auto_squared)
+```
+
+The results of the ANOVA demonstrate that the full model with a squared term for `horsepower` is superior to the reduced model with just `horsepower`.  Further, we can see that a higher proportion of the variability is explained by the regression model with the squared term compared to the reduced model.  We can look at a plot of the fitted values against the studentized residuals and look to see if there are any patterns.
+
+```{r}
+data.frame(fit = fitted(auto_squared), 
+           stud_resid = MASS::studres(auto_squared)) %>% 
+  ggplot(aes(fit, stud_resid)) + 
+  geom_point(alpha = 0.5) + 
+  geom_hline(yintercept = c(0, -3, 3), linetype = "dashed", 
+             color = c("black", "red", "red")) + 
+  geom_smooth(se = FALSE) + 
+  labs(x = "Fitted values", y = "Studentized residuals")
+```
+
+Indeed, now we can see that there is not much of a pattern when we fit a smoothed curve to the studentized residuals against the fitted values.
+
+2) Using the `Auto` data set for multiple linear regression:
+
+First, to explore potential collinearity or multicollinearity between different variables, we can use `GGally` to create a matrix of scatterplots with correlations.
+
+```{r auto scatterplot matrix}
+# Remove name and origin (categorical variables) and see correlation with everything else
+Auto %>% 
+  dplyr::select(-c(name, origin)) %>% 
+  GGally::ggpairs()
+
+```
+
+We can also just look at the correlation matrix of all variables excluding `name`.
+
+```{r auto correlation matrix}
+Auto %>% 
+  dplyr::select(-name) %>% 
+  cor() %>% 
+  ggcorrplot() + 
+  labs(title = "Correlation matrix among predictors in auto data set")
+
+```
+
+From this correlation matrix, we can see that there is evidence of multicolinearity here-- specifically, with weight, horsepower, displacement, and cylinders.  We can fit a full model with all predictors except `name` and calculate the variance inflation factor for each.
+
+```{r auto full model}
+# Build full model
+auto_full <- lm(mpg ~ . - name, data = Auto)
+
+# Calculate VIF
+car::vif(auto_full)
+```
+
+Just as we saw in the correlation matrix plot, there are a few variables showing evidence of multicollinearity with other variables.
+
+```{r}
+summary(auto_full)
+```
+
+But, as it turns out, perhaps we don't even need to include `horsepower`, `acceleration`, or `cylinders` in the model.  Let's refit and see what we find.
+
+```{r}
+auto_fit <- lm(mpg ~ weight + year + origin, data = Auto)
+summary(auto_fit)
+car::vif(auto_fit)
+```
+
+Now we fit a model without `displacement`, as it was not significant-- when we fit the model with just the weight, year, and origin, we can see that all are statistically significant and they all have low variance inflation factors.  The coefficient for `year` suggests that the year in which the vehicle was manufactured has a positive effect on the fuel efficiency.  Specifically, there is an average of 0.7571 increase in mpg every year.  
+
+Now we'll build a series of diagnostic plots for the multiple linear regression with the `Auto` data set and identify any potential problems.
+
+```{r auto mlr diagnostic plots}
+auto_diagnostics <- data.frame(fit = fitted(auto_fit), 
+                               resid = residuals(auto_fit),
+                               stud_resid = MASS::studres(auto_fit), 
+                               hat_vals = hatvalues(auto_fit))
+
+p1 <- auto_diagnostics %>% 
+  ggplot(aes(fit, resid)) + 
+  geom_point(alpha = 0.5) + 
+  geom_hline(yintercept = 0, linetype = "dashed") + 
+  geom_smooth(se = FALSE)
+
+p2 <- auto_diagnostics %>% 
+  ggplot(aes(fit, stud_resid)) + 
+  geom_point(alpha = 0.5) +
+  geom_hline(yintercept = c(0, -3, 3), linetype = "dashed") + 
+  geom_smooth(se = FALSE)
+
+p3 <- auto_diagnostics %>% 
+  ggplot(aes(hat_vals, stud_resid)) + 
+  geom_point(alpha = 0.5) + 
+  geom_hline(yintercept = c(0, -3, 3), linetype = "dashed") + 
+  geom_vline(xintercept = 4 / nrow(Auto), linetype = "dashed")
+
+patchwork::wrap_plots(p1, p2, p3, nrow = 2)
+```
+
+Here, we can see that there are problems with the straight-line linear fit over the range of values for the predictors, which could mean there are interactiont terms or higher-order polynomials that could be used for a superior model.  We can also see by looking at the studentized residuals that there are a few outliers.  We can also see from the leverage plot with the studentized residuals against the hat values that there are a substantial number of observations with relatively high leverage (vertical line indicates the mean leverage).  Let's try looking at a model with interaction effects.
+
+```{r}
+auto_interaction <- lm(mpg ~ weight*year + origin*year + origin*weight, data = Auto)
+summary(auto_interaction)
+```
+
+Interestingly, there are statistically significant interactions between weight and year, and weight and origin, but not year and origin.  Let's remove the interaction between year and origin and then check the diagnostic plots. 
+
+```{r define diagnostic plotting functions}
+auto_interaction_v2 <- lm(mpg ~ weight*year + origin*weight, data = Auto)
+summary(auto_interaction_v2)
+
+# Write function to calculate diagnostic metrics
+get_diagnostic_metrics <- function(model) {
+  
+  df <- data.frame(fit = fitted(model), 
+                   resid = residuals(model), 
+                   stud_resid = MASS::studres(model), 
+                   hat_vals = hatvalues(model)) 
+  
+  return(df)
+}
+
+# Write function to create diagnostic plots
+make_diagnostic_plots <- function(diagnostic_df, model) {
+  
+  p1 <- diagnostic_df %>% 
+    ggplot(aes(fit, resid)) + 
+    geom_point(alpha = 0.5) + 
+    geom_hline(yintercept = 0, linetype = "dashed") + 
+    geom_smooth(se = FALSE) + 
+    labs(x = "Fitted", y = "Residuals")
+  
+  p2 <- diagnostic_df %>% 
+    ggplot(aes(fit, stud_resid)) + 
+    geom_point(alpha = 0.5) + 
+    geom_hline(yintercept = c(0, -3, 3), linetype = "dashed", 
+               color = c("black", "red", "red")) + 
+    geom_smooth(se = FALSE) + 
+    labs(x = "Fitted", y = "Studentized residuals")
+  
+  p3 <- diagnostic_df %>% 
+    ggplot(aes(hat_vals, stud_resid)) + 
+    geom_point(alpha = 0.5) + 
+    geom_hline(yintercept = c(0, -3, 3), linetype = "dashed", 
+               color = c("black", "red", "red")) + 
+    geom_vline(xintercept = (length(model$coefficients) - 1) / nrow(diagnostic_df), linetype = "dashed") + 
+    labs(x = "Hat values", y = "Studentized residuals")
+  
+  wrapped_plots <- patchwork::wrap_plots(p1, p2, p3, nrow = 2)
+  return(wrapped_plots)
+}
+
+auto_interaction_diagnostics <- get_diagnostic_metrics(auto_interaction_v2)
+make_diagnostic_plots(auto_interaction_diagnostics, auto_interaction_v2)
+```
+After fitting the interaction terms, there are not really any discernable patterns in the residuals or studentized residuals.  Further, there are no high leverage observations now either with this new model fit.  
+
+```{r}
+anova(auto_fit, auto_interaction_v2)
+```
+
+Finally, after running an ANOVA, we can see that the full model with the interaction terms is a superior fit relative to the reduced model without them.
+
+3) Fitting models with the `Carseats` data:
+
+First, we'll fit a multiple regression model to predict sales by price, whether or not the store is in an urban environment or not, and whether the store is in the US or not.
+
+```{r carseats model}
+carseats_fit <- lm(Sales ~ Price + US + Urban, data = Carseats)
+summary(carseats_fit)
+```
+
+The linear regression model indicates that `Price` and `US` are significant predictors of `Sales`.  Specifically, holding all other factors constant, a one unit increase in price is associated with a decrease of 54.459 units in average sales (sales is in thousands); when looking at the qualitative predictor, on average, if the store is in the US, it is 1200.573 units more than if it was in a store outside of the US, holding all other predictors constant.
+
+Below is the model written out in equation form for urban sales in the US:
+
+$Sales = 13.043469 + -0.054459*Price + 1.200573 + -0.021916$
+
+We can reject the null hypothesis for `Price` and `US` only; the coefficient for `Urban` is not statistically different from 0.  Given that only a subset of the predictors are significant, we can re-fit the model.
+
+```{r}
+carseats_fit <- lm(Sales ~ Price + US, data = Carseats)
+summary(carseats_fit)
+```
+
+Overall, these two predictors only explain a relatively small proportion of the variability in the response (~25%).  Let's check the diagnostic plots for the second model.
+
+```{r}
+carseats_diagnostics <- get_diagnostic_metrics(carseats_fit)
+make_diagnostic_plots(carseats_diagnostics, carseats_fit)
+```
+
+Overall, these plots demonstrate that the model fits the data relatively well-- there don't appear to be any patterns in the studentized residual plot, other than some non-linearity in the extremes of the distribution of the fitted values.  Below, we'll calculate the 95% confidence intervals for the coefficients of this model.
+
+```{r carseats model coefficients}
+confint(carseats_fit)
+```
+
+On the basis of the leverage plot with the hat values on the x-axis and studentized residuals on the y-axis, we can see that there are a relatively large number of observations that have high leverage (greater than the mean leverage).  Let's see which observations those are.
+
+```{r investing high leverage carseats}
+carseats_diagnostics %>% 
+  rownames_to_column("id") %>% 
+  left_join(Carseats %>% rownames_to_column("id"), 
+            by = "id") %>% 
+  mutate(high_leverage = hat_vals > 0.01) %>% 
+  ggplot(aes(Price, Sales, color = high_leverage)) + 
+  geom_point(size = 3, alpha = 0.5)
+```
+
+From here, we can see that the high leverage values of `Price` are more at the ends of the distribution.  
+
+4) Investigating the t-statistic for the null hypothesis without an intercept.
+
+```{r applied ex 4}
+# Generate a predictor and response from the normal distribution
+set.seed(1)
+x <- rnorm(100)
+y <- 2 * x + rnorm(100)
+df <- data.frame(x = x, y = y)
+
+# Plot
+df %>% ggplot(aes(x, y)) + 
+  geom_point()
+```
+
+Now, we'll perform a simple linear regression without an intercept.
+
+
+```{r model with no intercept}
+# To fit a model without an intercept, either use y ~ x -1 or y ~0 + x
+mod <- lm(y ~ x - 1, data = df)
+summary(mod)
+```
+
+The estimate of $\beta_1$ is 1.9939 with a standard error of 0.1065.  The t-statistic is 18.73 with a p-value of <2e-16.  Thus, the probablility of observing a t-statistic of 18.73 under the null hypothesis that $\beta_1 = 0$ is <2e-16, indicating `x` is a significant predictor of `y`.  Now we'll perform another regression, this time to evaluate the association of `y` as a predictor of `x`.
+
+```{r}
+mod2 <- lm(x ~ y - 1, data = df)
+summary(mod2)
+```
+
+Now, the estimate of the coefficient of $\beta_1$ has changed, as well as its standard error and the residual standard error of the model.  However, the t-statistic, multiple R-squared, and F-statistic estimates are all exactly the same.  The t-staistics are calculated by dividing the coefficient estimate by its standard error-- in both models, this produces a t-statistic of 18.73.
+
+Now we'll perform the same linear regressions, but this time with an intercept term in each.
+
+```{r}
+mod1 <- lm(x ~ y, data = df)
+mod2 <- lm(y ~ x, data = df)
+summary(mod1)
+
+```
+```{r}
+summary(mod2)
+```
+
+The t-statistics are the same for $\beta_1$ in both models.
+
+5) For models without an intercept:
+
+The coefficient estimates for the regression of X onto Y is the same as it is for Y onto X because we can re-write each equation to be equivalent to the other.
+
+To test that this is the case, we can simulate another 100 observations in which the coefficient estimate for the regressions are different.
+
+```{r}
+# Simulate another 100 observations
+x <- rnorm(100)
+y <- 2 * x + rnorm(100, sd = 0.5)
+df2 <- data.frame(x = x, y = y)
+
+# Build models
+mod1 <- lm(x ~ y - 1, data = df2)
+mod2 <- lm(y ~ x - 1, data = df2)
+summary(mod1)
+summary(mod2)
+```
+
+6) Simulating some data:
+
+```{r working with simulated data}
+set.seed(1)
+x <- rnorm(100)
+eps <- rnorm(100, sd = 0.25)
+y <- -1 + 0.5*x + eps
+
+```
+
+The length of the vector `y` is 100.  The value of $\beta_0 = -1$ and the value of $\beta_1 = 0.5$.
+
+```{r}
+# Create sactterplot
+data.frame(x = x, y = y) %>% 
+  ggplot(aes(x, y)) + 
+  geom_point() + 
+  geom_abline(slope = 0.5, intercept = -1, 
+              linetype = "dashed", color = "blue")
+```
+
+Fit a linear model to check the model coefficients.
+
+```{r}
+df <- data.frame(x = x, y = y)
+mod <- lm(y ~ x, data = df)
+summary(mod)
+```
+
+The values of the intercept and estimate for $\beta_1$ are almost identical to what we simulated.  Now we'll draw the population regression line-- that is, the true relationship that we know a priori because we simulated the data-- and the estimate regression line.
+
+```{r}
+ggplot(aes(x, y), data = df) + 
+  geom_point() + 
+  geom_abline(slope = c(0.5, mod$coefficients[2]), 
+              intercept = c(-1, mod$coefficients[1]), 
+              linetype = "dashed", color = c("blue", "red"))
+```
+
+Now we can fit a polynomial with $x$ and $x^2$, then re-plot the population regression line with the polynomial regression line.
+
+```{r}
+mod2 <- lm(y ~ x + I(x^2), data = df)
+ggplot(aes(x, y), data = df) + 
+  geom_point() + 
+  geom_abline(slope = 0.5, intercept = -1, 
+              linetype = "dashed", color = "blue") + 
+  geom_line(data = fortify(mod2), aes(x, .fitted), 
+            linetype = "dashed", color = "red")
+```
+
+To evaluate whether the quadratic term improves the model fit, we can first look at the overall R-squared for both models, perform an ANOVA, and then look at some diagnostic plots.  First, the R-squared for the model with just $x$ is `r summary(mod)$r.squared`, while the R-squared for the model with the quadratic term is `r summary(mod2)$r.squared`, a slightly improved fit.  
+
+```{r}
+anova(mod, mod2)
+```
+
+However, while there is slightly more variation in the response explained by the quadratic model, the results of the ANOVA suggest the quadratic model isn't a superior fit compared to the reduced model.  Now let's look at some diagnostic plots.
+
+```{r}
+make_diagnostic_plots(diagnostic_df = get_diagnostic_metrics(mod), 
+                      model = mod)
+```
+
+From here, we can see that there aren't really any patterns in the residuals, other than some non-linearity in the response, but it's not substantial.  There are no outliers, although there are some high leverage observations.  Now let's look at the same diagnostic plots for the quadratic model.
+
+```{r}
+make_diagnostic_plots(diagnostic_df = get_diagnostic_metrics(mod2), 
+                      model = mod2)
+```
+
+There are some slight improvements to the model fit looking at the residuals plots and the leverage plots, although we may sacrifice a reduction in training data bias for variance when presented with new data.
+
+Now we'll repreat the analysis but reduce the variance in the normal distribution that we use to generate the data, then repeat and increase the variance.
+
+```{r}
+# Simulate data
+set.seed(1)
+x <- rnorm(100)
+eps <- rnorm(100, sd = 10)
+y <- -1 + 0.5*x + eps
+df3 <- data.frame(x = x, y = y)
+
+# Plot
+ggplot(aes(x, y), data = df) + 
+  geom_point() + 
+  geom_abline(intercept = -1, slope = 0.5, 
+              linetype = "dashed", color = "blue")
+
+# Create models and compare output
+mod1 <- lm(y ~ x, data = df)
+mod2 <- lm(y ~ x + I(x^2), data = df)
+summary(mod2)
+
+ggplot(aes(x, y), data = df) + 
+  geom_point() + 
+  geom_abline(intercept = -1, slope = 0.5,
+              linetype = "dashed", color = "blue") + 
+  geom_line(data = fortify(mod2), aes(x, .fitted), 
+            linetype = "dashed", color = "red")
+
+summary(mod1)$r.squared
+summary(mod2)$r.squared # still higher
+
+make_diagnostic_plots(get_diagnostic_metrics(mod2), mod2)
+```
+
+Compare the confidence intervals for the coefficient estimates.
+
+```{r}
+eps <- rnorm(100)
+less_var_eps <- rnorm(100, sd = 0.01)
+more_var_eps <- rnorm(100, sd = 10)
+
+y <- -1 + 0.5*x + eps
+y_less <- -1 + 0.5*x + less_var_eps
+y_more <- -1 + -0.5*x + more_var_eps
+
+df1 <- data.frame(x = x, y = y)
+df2 <- data.frame(x = x, y = y_less)
+df3 <- data.frame(x = x, y = y_more)
+
+df_list <- list(df1, df2, df3)
+names(df_list) <- c("normal", "less_var", "more_var")
+nested_df <- bind_rows(df_list, .id = "type") %>% 
+  group_by(type) %>% 
+  nest() %>% 
+  mutate(model = map(data, ~ lm(y ~ x, data = .x)), 
+         conf_int = map(model, unlist(confint)))
+
+names(nested_df$conf_int) <- nested_df$type
+nested_df$conf_int
+
+
+```
+
+In general, the model with less variance in the error term has tighter confidence intervals for the estimate of $\beta_1$, while the confidence interbals for the model with more variance in the error is relatively wide (in fact, it overlaps zero).  This makes sense, given that when there's more noise in the data, the wider the interval has to be in order to be reasonably confident that the in repeated samplings, the true population parameter would fall in 95/100 intervals.  Intuitively, as the amount of variance in the error is reduced, the estimates for the coefficients are more precise, the standard error is smaller, and thus the confidence intervals are narrower.
+
+7) Focusing on the collinearity problem:
+
+```{r}
+set.seed(1)
+x1 <- runif(100)
+x2 <- 0.5 * x1 + rnorm(100) / 10
+y <- 2 + 2 * x1 + 0.3 *x2 + rnorm(100)
+```
+
+Below is the form of the linear model produced above.
+
+$Y = \beta_0 + \beta_1*X_1 + \beta_2*X_2 + \epsilon$
+
+Here, $\epsilon$ is the normally-distributed error term. Putting in the model coefficients:
+
+$Y = 2 + 2*X_1 + 0.3*X_2 + \epsilon$
+
+Now we'll create a scatterplot between `x1` and `x2`.
+
+```{r}
+df <- data.frame(x1 = x1, x2 = x2, y = y)
+ggplot(aes(x1, x2), data = df) + 
+  geom_point()
+```
+
+The correlation between the two variables is `r cor(df$x1, df$x2)`.
+
+Now we'll fit a linear model to look at the association between `y` and `x1` and `x2`, which we know show a relatively high degree of collinearity.
+
+```{r}
+mod1 <- lm(y ~ x1 + x2, data = df)
+summary(mod1)
+```
+
+Based on these results, we reject the null hypothesis that $\beta_1 = 0$, as the p-value is less than 0.05, but cannot reject the null hypothesis for $\beta_2 = 0$.  However, it's important to note that these estimates are different than the known population regression coefficients-- specifically, we know that the true value of $\beta_1 = 2$, and the true value for $\beta_2 = 0.3$, but our model estimated the coefficients are approximately 1.5 and 1, respectively.  Now we'll fit a regression just using `x1` and `x2` separately.
+
+```{r}
+mod2 <- lm(y ~ x1, data = df)
+summary(mod2)
+```
+
+```{r}
+mod3 <- lm(y ~ x2, data = df)
+summary(mod3)
+```
+
+Now we can reject the null hypothesis for each term when we build separate models to test the coefficients individually.  The results of the model with both terms included vs those with the terms fit individually contradict each other because when both terms are together, it's difficult to tease apart the individual effects of one predictor while holding the other constant due to the collinearity between them.  
+
+Finally, let's add one final observation, and see how each of the three models perform.
+
+```{r}
+x1 <- c(x1, 0.1)
+x2 <- c(x2, 0.8)
+y <- c(y, 6)
+
+df <- data.frame(x1 = x1, x2 = x2, y = y) %>% 
+  mutate(type = c(rep("old", 100), "new"))
+
+# Build models
+mod1 <- lm(y ~ x1 + x2, data = df)
+mod2 <- lm(y ~ x1, data = df)
+mod3 <- lm(y ~ x2, data = df)
+
+summary(mod1)$r.squared # 0.208893
+summary(mod2)$r.squared # 0.156
+summary(mod3)$r.squared # 0.21
+
+# Plot
+p1 <- ggplot(aes(x1, y, color = type), data = df) + 
+  geom_point()
+
+p2 <- ggplot(aes(x2, y, color = type), data = df) + 
+  geom_point()
+
+patchwork::wrap_plots(p1, p2) + 
+  plot_layout(guides = "collect")
+```
+
+In both scatterplots, we can see that the newly added observation is quite different than the others.  Let's see how this influences the model.
+
+```{r}
+# Build models
+mod1 <- lm(y ~ x1 + x2, data = df) 
+mod2 <- lm(y ~ x1, data = df)
+mod3 <- lm(y ~ x2, data = df)
+
+# Look at the R-squared values
+get_rsquared <- function(model) {
+  return(summary(model)$r.squared)
+}
+
+map(list(mod1, mod2, mod3), ~ get_rsquared(.x))
+```
+
+In general, it doesn't appear to change the R-squared values all that much, but let's see what the coefficients and their standard errors look like.
+
+```{r}
+map(list(mod1, mod2, mod3), ~ summary(.x))
+```
+
+Now we can see that the coefficients have all changed.  Let's see if that sample has high leverage.
+
+```{r}
+plot_leverage <- function(model) {
+  
+  df <- data.frame(stud_resid = MASS::studres(model), 
+                   hat_vals = hatvalues(model)) %>% 
+    mutate(type = c(rep("old", 100), "new"))
+  
+  plot <- ggplot(aes(hat_vals, stud_resid, color = type), 
+                 data = df) + 
+    geom_point(alpha = 0.5) + 
+    geom_vline(xintercept = (length(model$coefficients) - 1) / 
+                 length(model$fitted.values), 
+               linetype = "dashed") + 
+    geom_hline(yintercept = c(0, -3, 3), linetype = "dashed") + 
+    labs(x = "Fitted", 
+         y = "Studentized residuals") + 
+    scale_color_manual(values = c("red", "black")) + 
+    theme(legend.position = "none")
+  
+  return(plot)
+}
+
+map(list(mod1, mod2, mod3), ~ plot_leverage(.x)) %>% 
+  wrap_plots()
+```
+
+In the plots above, the black dots are the original observations and the red dots are the new observation  In the first plot with all variables, the new observation has high leverage; in the second plot, it has high leverage and also is an outlier; in the third plot, it has high leverage.  In the instances where the point has high leverage, it influences the regression line-- when it is an outlier, it will increase the standard error, due to the larger difference between the observation and the fitted estimate for that value of the predictor.
+
+8) Now we'll be using the `Boston` housing data set:
+
+First, we'll create simple linear regressions for each of the predictors in the data.
+
+```{r Boston ex 1}
+# Create models for each predictor separately
+nested_df <- Boston %>% 
+  pivot_longer(-crim, names_to = "predictors", values_to = "values") %>% 
+  group_by(predictors) %>% 
+  nest() %>% 
+  mutate(model = map(data, ~ lm(crim ~ values, data = .x)), 
+         results = map(model, ~ broom::tidy(.x)))
+
+nested_df %>% 
+  unnest(cols = results) %>% 
+  filter(term == "values") %>% 
+  arrange(p.value)
+```
+
+After building a model of each predictor against the response, the crime rate by town, each predictor is statistically significant except for the Charles River dummy variable.  Now we can build scatter plots of each of predictors and the respone and add the fitted regression line.
+
+```{r}
+# Create plots
+pmap(list(nested_df$data, nested_df$model, nested_df$predictors), ~ ggplot(aes(values, crim), data = ..1) + 
+       geom_point(alpha = 0.5) + 
+       geom_abline(intercept = coefficients(..2)[1], 
+                   slope = coefficients(..2)[2], 
+                   linetype = "dashed", color = "red", size = 1) + 
+       labs(x = ..3) + 
+       theme(panel.background = element_rect(fill = "white", color = "black"), 
+             panel.grid = element_blank())) %>% 
+  patchwork::wrap_plots(nrow = 3)
+```
+
+From this series of scatterplots, it's obvious there are some issues with the straight-line linear fit.  We can confirm this using a series of plots of the fitted values and the studentized residuals.
+
+```{r}
+pmap(list(nested_df$model, nested_df$predictors), 
+     ~ ggplot(aes(fit, stud_resid), data = data.frame(fit = fitted(..1), stud_resid = MASS::studres(..1))) + 
+       geom_point(alpha = 0.5) + 
+       geom_hline(yintercept = c(0, -3, 3), linetype = "dashed", color = c("black", "red", "red")) + 
+       geom_smooth(se = FALSE) +
+       labs(x = "Fitted", y = "Stud. resid.", title = ..2)) %>% 
+  patchwork::wrap_plots(nrow = 3)
+```
+
+Some of these plots look a bit strange because of the limited range of the fitted values, but in the others (e.g., `tax` and `nox`), we can see that there is some non-linear behavior across the range of the predictors.  Next, we'll fit a multiple linear regression with all predictors.
+
+```{r}
+boston_full <- lm(crim ~ ., data = Boston)
+broom::tidy(boston_full) %>% 
+  filter(p.value < 0.05)
+```
+
+Now we can see that only 4 predictors are statistically significant: `zn`, `dis`, `rad`, and `medv`.  Now let's create a scatterplot showing the simple linear regression coefficient estimate on the x-axis and the multiple linear regression coefficient estimate on the y-axis.
+
+```{r}
+names(nested_df$results) <- nested_df$predictors
+simple_coefs <- bind_rows(nested_df$results, .id = "predictor") %>% 
+  filter(term == "values") %>% 
+  select(-term) %>% 
+  rename("term" = predictor) %>% 
+  mutate(regression = "simple")
+
+plot_input <- broom::tidy(boston_full) %>% 
+  filter(term != "(Intercept)") %>% 
+  mutate(regression = "multiple") %>% 
+  bind_rows(simple_coefs)
+
+plot_input %>% 
+  select(term, estimate, regression) %>% 
+  pivot_wider(names_from = "regression", values_from = "estimate") %>% 
+  ggplot(aes(simple, multiple, color = term)) + 
+  geom_point()
+```
+
+Interestingly, most of the values are fairly similar, although many have different impacts on how we interpret the response-- for example, in the simple linear regression, `rm` has a positive effect on the response, while in the multiple linear regression, it has a negative effect.  There is an interesting example where in the simple linear regression, `nox` has a very strong positive effect on the response, while it is negative in the multiple linear regression.  
+
+Finally, we'll fit a model with squared and cubic terms to see if there is evidence of non-linear relationships between the predictors and the response.
+
+```{r}
+nested_df <- nested_df %>% 
+  mutate(interaction_model = map(data, ~lm(crim ~ values + I(values^2) + I(values^3), data = .x)), 
+         interaction_results = map(interaction_model, ~ broom::tidy(.x)))
+
+nested_df %>% 
+  unnest(cols = interaction_results) %>% 
+  filter(p.value < 0.05 & term != "(Intercept)")
+```
+
+After fitting a model with these higher-order polynomial terms, we can see that industry, nitrogen oxides concentration, age of the homes, distance to employment centers, pupil-teacher ratio, and median home value all have significant polynomial terms.  
