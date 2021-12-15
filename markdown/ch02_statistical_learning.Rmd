@@ -718,3 +718,10 @@ boston %>%
 
 In general, he median tax-rates, access to radial highways, and per-capita crime rates are higher for "in bounds" tracts.
 
+## Notes from meetings
+
+Part I:
+
+* The difference between the predicted value from a model and the observed value is the error, and the mean of these errors should be zero.
+
+* 
