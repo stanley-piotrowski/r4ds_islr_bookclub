@@ -1,0 +1,580 @@
+---
+title: 'Chapter 04: Classification'
+author: "Stan Piotrowski"
+date: "12/16/2021"
+output:
+  pdf_document:
+    toc: true
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+```{r load libraries and source scripts}
+pacman::p_load(tidyverse, ISLR2, patchwork, ggcorrplot)
+source("../plot_themes.R")
+```
+
+## Notes
+
+### Introduction
+
+* In general, it's difficult to use ordinary least squares with qualitative variables that have more than 2 categories because they may not have a natural ordering.
+* In addition, it's not advisable to perform a least squares regression for qualitative variables because the estimates of the average effect on the response may not be directly interpretable as a probability, unlike classification methods.
+
+### Logistic regression
+
+* Logistic regression models the probability of a class of qualitative variable given the predictor(s).
+* The key difference between the linear regression and logistic regression model is the latter gives output-- the probability of a class of qualitative variable given the data-- that is bounded between 0 and 1.
+* Importantly, when we're using estimated coefficients from the logistic regression to predict the probability of an outcome for different values of the predictor(s), we use the logistic function and use $e$ raised to the power of the coefficient estimates.
+* Let's reproduce the figure from the textbook comparing the results from a model predicting `default` status from `balance` using ordinary least squares and logistic regression.
+
+```{r compare ols and logistic regressions}
+# Fit models to default data set
+Default$dummy_default <- ifelse(Default$default == "Yes", 1, 0)
+ols_mod <- lm(dummy_default ~ balance, data = Default)
+logistic_mod <- glm(default ~ balance, data = Default, family = "binomial")
+
+# Plot
+p1 <- ggplot(aes(balance, dummy_default), data = Default) + 
+  geom_point(alpha = 0.5) + 
+  geom_abline(intercept = ols_mod$coefficients[1], slope = ols_mod$coefficients[2], 
+              color = "blue") + 
+  scale_x_continuous(labels = scales::label_dollar()) +
+  labs(x = "Balance", y = "Default status", title = "Ordinary least squares regression") + 
+  plot_theme
+
+# Add predicted probabilities for each observation
+Default$prob <- predict(logistic_mod, type = "response")
+
+p2 <- Default %>% 
+  ggplot(aes(balance, dummy_default)) + 
+  geom_point() + 
+  geom_smooth(method = "glm", method.args = list(family = "binomial"), 
+              se = FALSE) + 
+  scale_x_continuous(labels = scales::label_dollar()) +
+  labs(x = "Balance", y = "Default status", title = "Logistic regression") + 
+  plot_theme
+
+# Put the plots together
+wrap_plots(p1, p2)
+```
+
+ * It's important to consider how our interpretation of the effects of predictors on the probability of response when dealing with single predictors in a logistic regression vs. including multiple predictors.  This is due to confounding, or the fact that in some cases, some predictors are correlated with one another, but may not be included in a model with a single predictor or a subset of predictors.  A good example of this is the interpretation of `student` status in the `default` data set-- when evaluated on its own, `student` has a positive probability on default; but when included in a multiple logistic regression model, `student` has a negative effect on default.
+* In order to predict the probability of default for a given set of predictor values, we can either plug them in manually to the logistic equation, or use the `predict()` function with a data frame of new values.
+
+```{r predict new values}
+logistic_mod2 <- glm(dummy_default ~ student + income + balance, data = Default, family = "binomial")
+summary(logistic_mod2)
+
+# Predict probability of default for student
+predict(logistic_mod2, newdata = data.frame(student = "Yes", balance = 1500, income = 40000), type = "response") # 0.05788
+
+# Predict probability of default for non-student
+predict(logistic_mod2, newdata = data.frame(student = "No", balance = 1500, income = 40000), type = "response") # 0.1049919
+```
+
+* For cases with more than 2 classes of response variable, we can extend logistic regression to the multinomial space, re-writing the generic logistic function to include $\beta_{k1}X_1 + ... + \beta_{kp}X_p$, where $K$ is the number of classes of the response.
+* The only thing we need to do at the start is to decide which level should be treated as baseline-- however, although the coefficient estimates will differ, the log odds between any pair of classes and the fitted values will remain the same regardless of which class is chosen as the baseline.
+
+### Linear discriminant analysis
+
+* There are a few reasons why you wouldn't want to use logistic regression-- for example, if the difference is substantial between two classes of response, logistic regression estimates can be very unstable.
+* We then estimate the density function of a particular observation coming from a given class of the response to calculate the posterior probability-- or the probability that the observation belongs to one of $K$ classes of response given the predictor value.
+* One important assumption of these classifier is that we assume the functional form is normal or Gaussian.  Let's plot two normal distributions.  
+
+```{r visualize two random Gaussian distributions}
+# Construct vectors from normal distributions with the same variance and different means
+data.frame(norm1 = rnorm(1e5, mean = -1.25, sd = 1), 
+           norm2 = rnorm(1e5, mean = 1.25, sd = 1)) %>% 
+  pivot_longer(cols = everything(), names_to = "norm_type", values_to = "value") %>% 
+  ggplot(aes(value, fill = norm_type, color = norm_type)) + 
+  geom_density(alpha = 0.7) + 
+  geom_vline(xintercept = c(-1.25, 1.25), linetype = "dashed") + 
+  labs(x = "Gaussian random variable", y = "Density", fill = "") + 
+  theme(legend.position = "none")
+```
+
+* We can plug in the density function for a Gaussian distribution into Bayes theorem, then do some rearranging to get the function $\delta_k(x) = x * (\mu_k / \sigma^2) - (\mu^2_k / 2\sigma^2) + log(\pi_k)$
+* In linear discriminant analysis, we assign an observation to the $k$ class with the highest $\delta$ estimate-- in the textbook, they simplify this in a 2 class case by assuming that both distributions have the same variance (0.5) and the same prior probability (0.5).
+* The linear discriminant analysis estimates the key parameters using $\mu_k$, an estimate of the average, the mean of all the training observations in a particular $k$ class; $\sigma_2$, or the sample variances for each of $k$ classes, weighted by the sample size; and $\pi_k$, or the prior probability of an observation belonging to a particular class (this is just the proportion of observations for each of $k$ classes in the training data).
+* To explore how the linear discriminant analysis method works, let's take some random samples from each of the normal distributions, calculate the key values, and assign classes to each, then calculate the prediction accuracy.
+
+```{r manual linear discriminant analysis}
+# Build data frame with two normal distributions with the same variance but different means
+norm_df <- data.frame(norm1 = rnorm(1e5, mean = 1.25, sd = 0.5), 
+                      norm2 = rnorm(1e5, mean = -1.25, sd = 0.5))
+
+# Sample 
+norm1_sample <- sample(norm_df$norm1, 50)
+norm2_sample <- sample(norm_df$norm2, 50)
+
+# Estimate mean, variance for each 
+mean_norm1 <- mean(norm1_sample)
+mean_norm2 <- mean(norm2_sample)
+
+var_norm1 <- var(norm1_sample)
+var_norm2 <- var(norm2_sample)
+
+# Create function to calculate delta
+calc_delta <- function(mu, variance, obs) {
+  
+  stat <- obs * (mu / variance) - (mu^2 / 2*variance)
+  return(stat)
+}
+
+# Test the function on a value from the first normal distribution sample
+calc_delta(mean_norm1, var_norm1, 0.78) # 3.73 -- this would be assigned to class 1
+calc_delta(mean_norm2, var_norm2, 0.78) # -5.47
+
+# Pit this together and write another function to assign the class
+assign_class <- function(obs) {
+  k <- calc_delta(mean_norm1, var_norm1, obs) > calc_delta(mean_norm2, var_norm2, obs)
+  if (k == TRUE) {
+    return("norm1")
+  } else {
+    return("norm2")
+  }
+}
+
+# Calculate the decision boundary-- this is (mean norm1 + mean norm2) / 2
+decision_boundary <- (mean(norm1_sample) + mean(norm2_sample)) / 2 # non-zero, but very close
+
+# We know that the true decision boundary is 0, because we know what the estimate is for the first sample and the second sample
+
+# Assign classes using the new function
+res <- data.frame(norm1 = norm1_sample, norm2 = norm2_sample) %>% 
+  pivot_longer(cols = everything(), names_to = "distribution", values_to = "value") %>% 
+  mutate(assignment = map_chr(value, ~ assign_class(.x)), 
+         check_assignment = distribution == assignment) %>% 
+  count(check_assignment)
+
+# All of them are TRUE except for one
+
+# Plot distributions of the sampled observations and the decision boundary
+data.frame(x = norm1_sample, y = norm2_sample) %>% 
+  pivot_longer(cols = everything(), names_to = "type", values_to = "value") %>% 
+  ggplot(aes(value, fill = type, color = type)) + 
+  geom_density(alpha = 0.75) + 
+  geom_vline(xintercept = c(-1.25, 1.25, decision_boundary), linetype = "dashed")
+
+# Let's wrap this whole process up into a function, then repeatedly sample the normal distribution to calculate the error rates
+lda_manual <- function(df) {
+  
+  # Sample from normal distribution
+  norm1 <- sample(df$norm1, size = 500)
+  norm2 <- sample(df$norm2, size = 500)
+  
+  # Calculate mean and variance
+  mean_norm1 <- mean(norm1)
+  mean_norm2 <- mean(norm2)
+  
+  var_norm1 <- var(norm1)
+  var_norm2 <- var(norm2)
+  
+  res <- data.frame(norm1 = norm1, norm2 = norm2) %>% 
+    pivot_longer(cols = everything(), names_to = "type", values_to = "value") %>% 
+    mutate(assignment = map_chr(value, ~ assign_class(.x)), 
+           check_assignment = type == assignment) %>% 
+    count(check_assignment)
+  
+  false <- res$n[res$check_assignment == FALSE]
+  total <- sum(res$n)
+  error_rate <- round((false / total) * 100, 2)
+  return(error_rate)
+}
+
+# Test function
+lda_manual(norm_df)
+
+# Repeat the function 100 times and plot
+error_rates <- data.frame(rate = replicate(100, lda_manual(norm_df), simplify = TRUE))
+ggplot(aes(rate), data = error_rates) +
+  geom_density()
+```
+
+* In the case of applying an LDA classifier to data sets with more than 1 predictor, we make the assumption that each predictor follows a multivariate Gaussian distribution and allow some correlation between pairs of predictors.
+* Importantly, for each predictor, we have a class-specific mean vector and a covariance matrix that's common for all of the $K$ classes of that predictor.
+* The $\delta$ function is a linear function of the predictor $x$ and the decision rule is defined as a linear combination of $x$.
+* Similar to the 1-dimensional case, LDA assigns the observation to the class with the highest $\delta$.
+* To illustrate how this process works, we can predict `default` status based on `student` status and `balance`.
+* Sensitivity-- the percentage of true positives that are identified by a classifier.
+* It may be worth modifying the posterior probability threshold depending on the context of the problem.  Below, we'll re-create Figure 4.7 to visualize the overall error rate as a function of the posterior probability threshold.  Note-- come back to this when I figure out how they created this figure.
+
+```{r recreate figure 4.7}
+# Perform the LDA on the default data set
+default_lda <- MASS::lda(default ~ student + balance + income, data = Default)
+predictions <- data.frame(predict(default_lda, type = "response")) %>% 
+  set_names(c("class", "posterior_no", "posterior_yes", "LD1"))
+
+# Bind with original data frame
+Default$posterior_no <- predictions$posterior_no
+Default$posterior_yes <- predictions$posterior_yes
+
+# Build function to calculate the error rates
+# Build a confusion matrix based on the predictions, then tally the number of false positives and false negatives divided by the total number of observations
+# Also take the prediction threshold as an argument
+
+# Note, this needs to be fixed-- not matching the predicted values in the confusion matrix on page 150
+calc_error_rate <- function(input, prediction_threshold) {
+
+  out <- input %>% 
+  dplyr::select(default, contains("posterior")) %>% 
+  mutate(predicted_class = ifelse(posterior_no > prediction_threshold, "No", "Yes"),
+         true_neg = ifelse(default == "No", 1, 0), 
+         true_pos = ifelse(default == "Yes", 1, 0), 
+         predicted_neg = ifelse(predicted_class == "No", 1, 0), 
+         predicted_pos = ifelse(predicted_class == "Yes", 1, 0), 
+         false_pos = ifelse(true_neg == 1 & predicted_pos == 1, 1, 0), 
+         false_neg = ifelse(true_pos == 1 & predicted_pos == 0, 1, 0)) %>% 
+  dplyr::select(-default, -contains("posterior"), -predicted_class) %>% 
+  summarise(across(everything(), ~ sum(.)))
+  
+#summarise(error_rate = (sum(false_pos) + sum(false_neg)) / 10000)
+  
+  return(out)
+}
+
+calc_error_rate(Default, 0.2) %>% 
+  dplyr::select(contains(c("true", "false", "predicted"))) %>%
+  summarise(across(.cols = everything(), ~ sum(.)))
+
+# Calculate the error rates for a range of prediction thresholds 
+# The error rates are defined as the number of misclassifications-- false positives and false negatives-- divided by the total number of observations
+confusion_mat_full <- map(
+  seq(0, 0.5, 0.1), 
+  ~ calc_error_rate(Default, .x) %>% 
+    mutate(prediction_threshold = .x)) %>% 
+  bind_rows()
+  
+# Calculate error rates
+error_rates <- confusion_mat_full %>% 
+  dplyr::select(false_pos, false_neg, prediction_threshold) %>% 
+  mutate(misclassifications = false_pos + false_neg, 
+         error_rate = misclassifications / 10000)
+
+# Plot
+error_rates %>% 
+  ggplot(aes(prediction_threshold, error_rate)) + 
+  geom_line(linetype = "dashed")
+```
+
+* Another helpful summary visualization is the ROC curve-- we can use it to display the false positive rate and the false negative rate for a given classifier and use the area under the curve (AUC) to evaluate the performance of the model.  Ideally, the ROC curve will hug the top left corner, with a high true positive rate (y-axis) and low false positive rate (x-axis).
+* ROC curves display the sensitivity (true positive rate) against the specificity (false positive rate, 1 - sensitivity).
+
+### Quadratic discriminant analysis
+
+* Unlike LDA, which assumes that data in each class are normally distributed with a common covariance matrix for all classes, quadratic discriminant analysis (QDA) relaxes the common covariance assumption.
+* Normally, $p(p+1)/2$ coefficients must be estimated for $p$ predictors, but if we assume a separate covariance matrix for each class like in QDA, we now have to estimate $Kp(p+1)/2$ coefficients.
+* However, with LDA, we'd only have to estimate $Kp$ coefficients.  
+* The choice of LDA vs QDA deals with the bias-variance trade-off-- in general, in situations where there are few training observations and thus the risk of variance between test sets is high, LDA would be preferable and we would sacrifice some bias; however, in other situations where we have more training observations and variance in the test data isn't a major concern, or the error introduced by assuming a common covariance matrix is too high, we'd choose the QDA.
+* Let's try to explore the difference between LDA and QDA using the `iris` data set, using just `Sepal.Length` and `Seapal.Width`.  
+
+```{r LDA and QDA comparison with iris}
+# Let's just use two variables from the iris data
+# First, let's confirm that the variables are normally distributed
+p1 <- iris %>% 
+  ggplot(aes(sample = Sepal.Length)) + 
+  stat_qq(alpha = 0.7) + 
+  stat_qq_line(linetype = "dashed") + 
+  facet_wrap(~ Species, scales = "free") + 
+  labs(x = "Theoretical", y = "Sample", title = "Sepal length")
+
+p2 <- iris %>% 
+  ggplot(aes(sample = Sepal.Width)) + 
+  stat_qq(alpha = 0.7) + 
+  stat_qq_line(linetype = "dashed") + 
+  facet_wrap(~ Species, scales = "free") + 
+  labs(x = "Theoretical", y = "Sample", title = "Sepal width")
+
+patchwork::wrap_plots(p1, p2, nrow = 2)
+```
+
+* First after checking the normality assumptions, there appears to be some skew in `virginica`, although it's unclear how biased the results will be if the normality assumption is grossly violated.
+* Now we should calculate the covariance matrix between both variables in all species.
+
+```{r}
+iris %>% 
+  group_by(Species) %>% 
+  summarise(correlation = cor(Sepal.Length, Sepal.Width))
+```
+
+* From here, we can see that the correlation is not consistent across all classes of `Species`-- this would be a good opportunity to look at the difference between LDA and QDA to evaluate the effects of the common correlation structure across classes.  
+
+### Naive Bayes
+
+* In Bayes theorem, we can estimate the probability of a particular observation belonging to a given class using the prior probability, the density function of a predictor for an observation that comes from a specific class, and the product of the prior and density functions for all classes.  
+* To estimate the density functions, we need estimates of the mean and covariance for a given class-- in LDA, we assume a class-specific mean and common covariance matrix; in QDA, we assume a class-specific mean and class-specific covariance matrix.
+* In a naive Bayes setting, we assume that predictors in each class are independent.
+* In general, the naive Bayes assumption of independence among predictors in each class is reasonable and the model performs well in situations where there are few training observations and the need to reduce variance is more prominent.
+
+### Comparing between methods
+
+* Ultimately, the choice of which model to use will depend on the structure of the data and the shape of the true decision boundary-- if the decision boundary is linear, LDA and logistic regression will generally be best; if slightly non-linear, QDA or naive Bayes may be good choices; and if the decision boundary is very complicated and requires a more flexible model, KNN will generally outperform the others.
+* My general takeaway from this section is that for each data set, a substantial amount of exploratory data analysis is required to validate assumptions and guide the decision of which model to use.  Ultimately, though, it may mean using many different models and comparing the output (e.g., ROC curve).
+
+### Generalized linear models
+
+Starting in this next section, we're no longer considering a response variable that's qualitative (like default status using the loan data) or continuously quantitative.  Instead, we'll look at non-negative integers, or counts, using the `Bikeshare data`:
+
+```{r bikeshare ols}
+# Fit model with ordinary least squares
+bikeshare_ols <- lm(bikers ~ workingday + temp + weathersit + mnth + hr,
+                    data = Bikeshare)
+
+summary_ols <- broom::tidy(summary(bikeshare_ols))
+ols_p1 <- summary_ols %>% 
+  filter(grepl("mnth", term)) %>% 
+  mutate(term = factor(gsub("mnth", "", term), 
+                       levels = c("Jan", "Feb", "March", "April", 
+                                  "May", "June", "July", "Aug", "Sept", 
+                                  "Oct", "Nov", "Dec")), 
+         group = 1) %>% 
+  ggplot(aes(term, estimate, group = group)) + 
+  geom_path() +
+  geom_point() +
+  labs(x = "Month", y = "Coefficient", 
+       title = "OLS") + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+ols_p2 <- summary_ols %>% 
+  filter(grepl("hr", term)) %>% 
+  mutate(term = as.numeric(gsub("hr", "", term)), 
+         group = 1) %>% 
+  ggplot(aes(term, estimate, group = group)) + 
+  geom_path() + 
+  geom_point() + 
+  labs(x = "Hour", y = "Coefficient", 
+       title = "OLS")
+
+patchwork::wrap_plots(ols_p1, ols_p2)
+```
+
+It's worth looking at the summary of the model output.
+
+```{r ols bikeshare summary}
+head(broom::tidy(summary(bikeshare_ols)))
+```
+
+One of the most apparent issues with the results is that some of the coefficient estimates are negative-- this cannot be possible, because we can't have negative bikers.  Next, it's worth looking at the relationship between the mean and variance, since the ordinary least squares method assumes that the error term has a mean of zero and a constant variance, with no correlation with the covariates. 
+
+```{r check constant variance}
+# Plot the number of bikers per hour-- this should change by month
+p1 <- ggplot(Bikeshare, aes(hr, bikers)) + 
+  geom_boxplot() + 
+  labs(x = "Hour", y = "Number of bikers")
+
+# Plot the log-transformed data
+p2 <- ggplot(Bikeshare, aes(hr, log(bikers))) + 
+  geom_boxplot() + 
+  labs(x = "Hour", y = "log(number of bikers)")
+
+wrap_plots(p1, p2)
+```
+
+Using the log-transformation of the response appears to help the correlation between the covariates and the variance, but interpretation is challenging on this scale.  For thoroughness, it may also be worth looking at the fitted values against the studentized residuals.  We'll need to remove some of the inifinite studentized residuals.
+
+```{r bikeshare fitted values and residuals}
+# Create diagnostic data frames
+ols_diagnostics <- data.frame(
+  fit = fitted(bikeshare_ols), 
+  resid = residuals(bikeshare_ols), 
+  stud_resid = MASS::studres(bikeshare_ols),
+  hat_values = hatvalues(bikeshare_ols)
+)
+
+ols_std_resid <- ols_diagnostics %>% 
+  filter(across(everything(), ~ !is.na(.x))) %>% 
+  ggplot(aes(fit, stud_resid)) + 
+  geom_point(alpha = 1/5) +
+  geom_hline(yintercept = c(0, -3, 3), linetype = "dashed", 
+             color = "red") + 
+  geom_smooth(se = FALSE) + 
+  labs(x = "Fitted", y = "Studentized residuals", 
+       title = "OLS")
+
+ols_std_resid
+```
+
+We can also see from the plot of the studentized residuals above that the odinary least squares regression isn't a great fit for these data.
+
+### Poisson regression
+
+Instead of modeling the number of bikers as a function of the covariates using ordinary least squares, which assumes continuous responses, we can use Poisson regression.  This technique relies on the Poisson distribution, which describes the probability of observing counts over a defined interval.  Importantly, the Poisson assumes the mean and variance are equal, so we'll use the log-transformed number of bikers in the model.  Note, the code below to run the Poisson GLM is the same as the textbook, although the coefficient estimates are slightly different.  
+
+```{r bikeshare poisson}
+Bikeshare$log_bikers <- log(Bikeshare$bikers)
+bikeshare_poisson <- glm(
+  bikers ~ mnth + hr + workingday + temp + weathersit, 
+  data = Bikeshare, 
+  family = "poisson"
+)
+
+# Coefficients data frame
+coefs <- data.frame(coefficients(bikeshare_poisson)) %>% 
+  set_names("coef") %>% 
+  rownames_to_column("term") %>% 
+  filter(grepl("mnth", term) | grepl("hr", term))
+
+months <- filter(coefs, grepl("mnth", term)) %>% 
+  mutate(
+    term = factor(
+      gsub("mnth", "", term), 
+      levels = c("Jan", "Feb", "March", "April", "May", "June", "July", "Aug", "Sept",
+                 "Oct", "Nov", "Dec")
+    )
+  )
+
+hrs <- filter(coefs, grepl("hr", term)) %>% 
+  mutate( term = as.numeric(gsub("hr", "", term)))
+
+poisson_p1 <- ggplot(months, aes(term, coef, group = 1)) + 
+  geom_point() + 
+  geom_line() + 
+  labs(x = "Month", y = "Coefficient", title = "Poisson") + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+poisson_p2 <- ggplot(hrs, aes(term, coef, group = 1)) + 
+  geom_point() + 
+  geom_line() +
+  labs(x = "Month", y = "Coefficient", title = "Poisson")
+
+# Compare OLS and Poisson coefficients
+wrap_plots(ols_p1, ols_p2, poisson_p1, poisson_p2)
+```
+
+Let's see what the studentized residuals look like to evaluate model fit.
+
+```{r poisson studentized residuals}
+poisson_std_resid <- data.frame(
+  fitted = fitted(bikeshare_poisson),
+  std_resid = MASS::studres(bikeshare_poisson)
+)
+
+poisson_std_resid_plot <- ggplot(poisson_std_resid, aes(fitted, std_resid)) + 
+  geom_point(alpha = 1/5) + 
+  geom_hline(yintercept = c(-3, 0, 3), linetype = "dashed", color = "red") + 
+  geom_smooth(se = FALSE) + 
+  labs(x = "Fitted", y = "Studentized residuals", 
+       title = "Poisson")
+
+wrap_plots(ols_std_resid, poisson_std_resid_plot)
+```
+
+These plots demonstrate that in general, the Poisson model is a better fit relative to the OLS model.
+
+### GLMs in greater generality
+
+In general, all regression approaches model the mean of a response as a function of a set of predictors.  Importantly, for cases where the response is non-linear (e.g., binary or qualitative), a link function is used to transform the mean of the response as a linear function of the predictors (e.g., logit, as the log-link function).
+
+## Lab
+
+### Stock Market Data
+
+We will use the `Smarket` data tabulates the daily percentage returns for the S&P 500 stocks between 2001 and 2005.  The data include `Lag` variables- the percentage returns for the previous 5 trading days.  Ultimately, we want to predict `Direction`, or whether the market will go up or down, based on the other features. These include the lag variables, as well as `Year`, `Volume` (shares traded in the previous day in billions), and `Today` (shares traded on that day).  First, we'll get an idea of how correlated the variables are to one another using a correlation plot.
+
+```{r stock market correlation plot}
+as.matrix(Smarket[, -9]) %>% 
+  cor() %>% 
+  ggcorrplot()
+```
+
+From this plot, similar to what was described in the book, there's really no correlation with any of the quantitative variables, with the exception of `Volume`.  
+
+### Logistic regression
+
+The goal in this section is to use logistic regression to predict the `Direction` using the quantitative variables.
+
+```{r stock market logistic regression}
+smarket_logistic_mod <- glm(
+  formula = Direction ~ ., 
+  data = select(Smarket, -c("Today", "Year")), 
+  family = "binomial"
+)
+
+summary(smarket_logistic_mod)
+```
+
+None of the p-values here for any of the terms are statistically significant.  Still, we can use this model to predict probabilities and evaluate how well the model performs relative to the observed data.
+
+```{r logistic confusion matrix}
+# Compute probabilities using the model
+logistic_probs <- predict(smarket_logistic_mod, type = "response")
+
+# Make predictions based on probabilities
+logistic_pred <- ifelse(logistic_probs > 0.5, "Up", "Down")
+
+# Build the confusion matrix
+# The columns represent the real data; the rows are the predictions
+table(logistic_pred, Smarket$Direction)
+
+# What proportion of the market was accurately predicted by the data?
+mean(logistic_pred == Smarket$Direction) # 0.5216, or about 51% of the time
+```
+
+Now we'll want to train the data on a subset of observations, because in our initial analysis, we used the entire data set.  Let's subset our data to only include observations from before 2005.
+
+```{r logistic training data}
+# Split into training and test data
+training_data <- filter(Smarket, Year < 2005) # 998 observations
+validation_data <- filter(Smarket, Year == 2005) # 252 observations
+
+# Fit logistic regression
+logistic_training_mod <- glm(
+  formula = Direction ~ ., 
+  data = select(training_data, -c("Today", "Year")), 
+  family = "binomial"
+)
+
+# Make new predictions with validation data
+logistic_val_probs <- predict(
+  logistic_training_mod,
+  newdata = validation_data, 
+  type = "response"
+)
+
+logistic_val_pred <- ifelse(logistic_val_probs > 0.5, "Up", "Down")
+table(logistic_val_pred, validation_data$Direction)
+accuracy <- mean(logistic_val_pred == validation_data$Direction) # 48% accurate
+1 - accuracy # 52% error rate
+```
+
+Now we'll refit the logistic regression model with just the `Lag1` and `Lag2` variables, then see how well it performs using the validation data from 2005.
+
+```{r logistic refit variables}
+logistic_training_mod <- glm(
+  Direction ~ Lag1 + Lag2, 
+  data = select(training_data, -c("Today", "Year")), 
+  family = "binomial"
+)
+
+# Make new predictions with validation data
+logistic_val_probs <- predict(
+  logistic_training_mod,
+  newdata = validation_data, 
+  type = "response"
+)
+
+logistic_val_pred <- ifelse(logistic_val_probs > 0.5, "Up", "Down")
+table(logistic_val_pred, validation_data$Direction)
+accuracy <- mean(logistic_val_pred == validation_data$Direction) # 56% accurate
+1 - accuracy # 44% error rate
+
+```
+
+Finally, we'll predict the returns associated 
+### LDA
+
+### QDA
+
+### KNN
+
+### Poisson regression
+
+
+
+
+## Exercises
