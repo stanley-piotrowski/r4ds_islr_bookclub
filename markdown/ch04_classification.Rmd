@@ -14,7 +14,7 @@ knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
 ```
 
 ```{r load libraries and source scripts}
-pacman::p_load(tidyverse, ISLR2, patchwork, ggcorrplot)
+pacman::p_load(tidyverse, ISLR2, patchwork, ggcorrplot, MASS, e1071, class)
 source("../plot_themes.R")
 ```
 
@@ -296,7 +296,7 @@ patchwork::wrap_plots(p1, p2, nrow = 2)
 * First after checking the normality assumptions, there appears to be some skew in `virginica`, although it's unclear how biased the results will be if the normality assumption is grossly violated.
 * Now we should calculate the covariance matrix between both variables in all species.
 
-```{r}
+```{r iris correlation}
 iris %>% 
   group_by(Species) %>% 
   summarise(correlation = cor(Sepal.Length, Sepal.Width))
@@ -519,8 +519,8 @@ Now we'll want to train the data on a subset of observations, because in our ini
 
 ```{r logistic training data}
 # Split into training and test data
-training_data <- filter(Smarket, Year < 2005) # 998 observations
-validation_data <- filter(Smarket, Year == 2005) # 252 observations
+(training_data <- filter(Smarket, Year < 2005)) # 998 observations
+(validation_data <- filter(Smarket, Year == 2005)) # 252 observations
 
 # Fit logistic regression
 logistic_training_mod <- glm(
@@ -538,13 +538,14 @@ logistic_val_probs <- predict(
 
 logistic_val_pred <- ifelse(logistic_val_probs > 0.5, "Up", "Down")
 table(logistic_val_pred, validation_data$Direction)
-accuracy <- mean(logistic_val_pred == validation_data$Direction) # 48% accurate
-1 - accuracy # 52% error rate
+(accuracy <- mean(logistic_val_pred == validation_data$Direction)) # 48% accurate
+1 - accuracy # 52% error rate, a bit better-- this is the test error rate
 ```
 
 Now we'll refit the logistic regression model with just the `Lag1` and `Lag2` variables, then see how well it performs using the validation data from 2005.
 
 ```{r logistic refit variables}
+# Fit the model with the training data-- before 2005
 logistic_training_mod <- glm(
   Direction ~ Lag1 + Lag2, 
   data = select(training_data, -c("Today", "Year")), 
@@ -565,15 +566,233 @@ accuracy <- mean(logistic_val_pred == validation_data$Direction) # 56% accurate
 
 ```
 
-Finally, we'll predict the returns associated 
 ### LDA
+
+First, we'll fit the LDA model using the same training data before 2005 with just `Lag1` and `Lag2`.  
+
+```{r LDA with lag1 and lag2}
+# Fit model with the training data
+(lda_mod1 <- lda(Direction ~ Lag1 + Lag2, data = training_data))
+
+# Predict with 2005 data
+(lda_predictions <- predict(lda_mod1, newdata = validation_data))
+
+# Look at the class predicted by the model
+(lda_class <- lda_predictions$class)
+
+# How accurate was the test?
+mean(lda_class == validation_data$Direction) # about 56% accuracy
+
+```
+
+Note, the above class predictions are based on a 50% probability threshold.  If we wanted to modify the posterior probability threshold for class assignment, we could manually do so.  For example, let's see how the prediction accuracy changes using different posterior probabilities.
+
+```{r varying probability thresholds for prediction}
+# Calculate accuracy for each threshold
+accuracy <- map(
+  seq(0.1, 0.9, 0.1), 
+  ~ifelse(lda_predictions$posterior[, 1] > .x, "Down", "Up")
+  ) %>% 
+  map_dbl(~ mean(.x == validation_data$Direction))
+  
+# Build data frame and plot
+data.frame(posterior = seq(0.1, 0.9, 0.1), 
+           accuracy = accuracy) %>% 
+  ggplot(aes(posterior, accuracy)) + 
+  geom_point() +
+  geom_line() +
+  scale_x_continuous(breaks = seq(0.1, 0.9, 0.1), 
+                     labels = seq(0.1, 0.9, 0.1)) +
+  labs(x = "Posterior probability", 
+       y = "Accuracy")
+```
+
+Here, we can see that only when we use the 50% probability threshold to we see any change in the prediction accuracy with the validation data.  
 
 ### QDA
 
+Now we're going to fit a QDA model to the same data with the same two variables.
+
+```{r QDA with lag1 and lag2}
+# Fit the model
+(qda_mod1 <- qda(Direction ~ Lag1 + Lag2, data = training_data))
+
+# Predict with new data
+(qda_predictions <- predict(qda_mod1, newdata = validation_data))
+
+# How accurate is the model?
+mean(qda_predictions$class == validation_data$Direction) # about 60% accuracy
+
+```
+
+Interestingly, it looks like the quadratic relationship modeled by the QDA model is more accurate at predicting the stock market than the linear forms.
+
+### Naive Bayes
+
+Fit the same two variables to model the direction of the stock market using a naive Bayes classifier.
+
+```{r naive bayes with lag1 and lag2}
+# Fit the model
+(naive_bayes_mod1 <- naiveBayes(Direction ~ Lag1 + Lag2, data = training_data))
+
+# Predict and compute accuracy
+naive_bayes_predictions <- predict(naive_bayes_mod1, newdata = validation_data)
+
+mean(naive_bayes_predictions == validation_data$Direction) # almost 60%, very similar to the QDA model prediction accuracy
+```
+
+To generate posterior probabilities of observations belonging to a particular class, we need to supply a different argument with the `predict()` function.
+
+```{r predict posteriors from naive Bayes}
+(probs <- predict(naive_bayes_mod1, newdata = validation_data, type = "raw"))
+
+```
+
 ### KNN
 
-### Poisson regression
+Now we'll fit a K-nearest neighbors classifier using the `class::knn()` function.  The input data required is slightly different than the functions used for other classifiers we examined previously.  The function is written in C, with the R wrapper `class::knn()` mostly doing data type checking before passing off the inputs.  We can see this using `getAnywhere("knn")`.
 
+```{r prepare KNN model input}
+# Matrix of predictors with the training data
+training_mat <- as.matrix(dplyr::select(training_data, Lag1, Lag2))
+
+# Matrix of predictors with the validation data
+validation_mat <- as.matrix(dplyr::select(validation_data, Lag1, Lag2))
+
+# Vector of class labels for training observations
+training_labels <- training_data$Direction
+```
+
+The model will take each of these inputs, along with a value for K, or the number of nearest neighbors to consider in the classifier, and makes predictions in a single command.
+
+```{r fit KNN model}
+# Fit many different values for the number of nearest neighbors to consider
+set.seed(1) # important, random number needed to break ties
+knn_predictions <- map(
+  .x = seq(1, 30, 1), 
+  .f = ~ class::knn(
+    train = training_mat, 
+    test = validation_mat, 
+    cl = training_labels, 
+    k = .x
+  )
+)
+
+# Evaluate the accuracy of each and plot
+accuracy_df <- data.frame(
+  k = seq(1, 30, 1), 
+  accuracy = map_dbl(knn_predictions, ~ mean(.x == validation_data$Direction))
+)
+
+arrange(accuracy_df, desc(accuracy))
+
+ggplot(accuracy_df, aes(k, accuracy)) + 
+  geom_point() + 
+  geom_line() + 
+  scale_x_continuous(breaks = seq(1, 30, 1))
+
+
+```
+
+The prediction accuracy varies quite a lot across the range of different values for K.  Let's see which values have the highest accuracy.
+
+```{r rank accuracy}
+arrange(accuracy_df, desc(accuracy))
+```
+
+Interestingly, K=3 and K=11 are tied for the highest prediction accuracy.  It's marginally better than using LDA, but not quite as good as QDA or naive Bayes.
+
+To illustrate the power of using the KNN classifier, we'll apply the method to the `Caravan` data set, which contains nearly 6,000 customer records with sociodemographic and product ownership data.  In this instance, we'll look at `Purchase` as the response variable, or whether the customer purchased a caravan insurance policy.  There are only about 6% of records in the data for customers that purchased the policy.  One important aspect to consider about the KNN classifier is the scale of the data, as the classifier considers observations that are nearest to it.  So, we need to scale the data, which ensures that each variable has a mean of 0 and standard deviation of 1.  
+
+```{r standardize caravan data}
+# Scale
+caravan_std <- scale(Caravan[, -86])
+
+# Confirm that each variable has a mean of 0 and standard deviation of 1
+check_std <- apply(caravan_std, 2, function(x)
+  if(near(mean(x), 0) & near(var(x), 1)) {
+    print(TRUE)
+  } else {
+    print(FALSE)
+  }
+)
+
+all(check_std == TRUE) # TRUE
+```
+
+Now we'll fit the KNN, using the first 1,000 observations as the test set, and the remaining observations as the training set.
+
+```{r fit KNN to std caravan data}
+# Split into training and test set
+test <- 1:1000
+caravan_training <- caravan_std[-test, ] # train on everything except 1000 observations
+caravan_validation <- caravan_std[test, ] # train on the first 1000 observations
+
+# Classification labels for training set
+training_labels <- Caravan$Purchase[-test]
+validation_labels <- Caravan$Purchase[test]
+
+# Fit KNN using different values of K
+set.seed(1)
+caravan_predictions <- map(
+  .x = seq(1, 25, 1), 
+  .f = ~ knn(
+    train = caravan_training, 
+    test = caravan_validation, 
+    cl = training_labels, 
+    k = .x
+  )
+)
+
+# Calculate accuracy
+accuracy_df <- data.frame(
+  k = seq(1, 25, 1), 
+  accuracy = map_dbl(caravan_predictions, ~ mean(.x == validation_labels))
+)
+
+# Which value of K has the highest accuracy?
+arrange(accuracy_df, desc(accuracy)) 
+
+# Plot
+ggplot(accuracy_df, aes(k, accuracy)) + 
+  geom_point() + 
+  geom_line() + 
+  scale_x_continuous(breaks = seq(1, 25, 1)) + 
+  labs(x = "K", y = "Accuracy", title = "Prediction accuracy of KNN classifier")
+```
+
+The highest prediction accuracy is achieved using K=9, or considering 9 nearest neighbors.  However, we still achieve > 92% using K=3 or greater.  But, this is a bit misleading, since there are so few `Yes` purchase records in the data set (recall, about 6%).  We can consider a realistic scenario where we are only interested in targeting people for insurance sales that are most likely to buy it.  Let's see how many `Yes` we accurately predicted using each level of K.  
+
+```{r yes predictions}
+# For each value of K, look at the accuracy of Yes records
+names(caravan_predictions) <- seq(1, 25, 1)
+(accuracy_yes_df <- map(
+  caravan_predictions, 
+  ~ data.frame(
+    prediction = .x, 
+    true_outcome = validation_labels)
+) %>% 
+    bind_rows(.id = "k") %>% 
+    mutate(pred_yes = ifelse(prediction == "Yes", 1, 0), 
+           both_yes = ifelse(prediction == "Yes" & true_outcome == "Yes", 1, 0), 
+           k = as.numeric(k)) %>% 
+    group_by(k) %>% 
+    summarise(accuracy = sum(both_yes) / sum(pred_yes)) %>% 
+    mutate(accuracy = replace_na(accuracy, 0)))
+
+# Plot
+ggplot(accuracy_yes_df, aes(k, accuracy)) + 
+  geom_point() + 
+  geom_line() + 
+  labs(x = "K", y = "Accuracy", 
+       title = "Prediction accuracy for number of true positives", 
+       subtitle = "At K=1, we accurately predict 12% of true positive; at K=9, 100%")
+
+```
+
+The numbers we computed above will be a bit different from those in the book because the authors set the seed each time they fit a KNN model with a different value for K; we wrapped all this in a call to `map()`.  However, in general, the numbers are quite comparable.  If we just consider random guessing, we would only be correct about 6% of the time (that is, the true number of `Yes` records in the data set).  So if we target just those customers that are most likely to purchase insurance, we're almost twice as accurate than random guessing, even using a KNN with K=1 (accuracy = 0.117).  If we go up to K=5, similar to the book, we're about 26.7% accurate.  If we go up to K=9, we can perfectly predict those customers that are likely to purchase the insurance.  To review, this exercise was saying that out of the number of predicted people that are likely to purchase insurance, using various KNN classifiers will accurately predict these about 10% up to 100% of the time.  
+
+### Poisson regression
 
 
 
