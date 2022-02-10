@@ -1176,9 +1176,212 @@ logistic_all_terms <- glm(
   rownames_to_column("term") %>% 
   set_names("term", "estimate", "std_error", "z_value", "pval"))
 
-# None are significant, but let's still check out how they perform as a classifier
+# None are significant, but Lag2 and Lag3:Lag4 have the lowest p-values
+# Build a new model with these terms only
+logistic_subset <- glm(
+  Direction ~ Lag2 + Lag3*Lag4,
+  data = training_set, 
+  family = "binomial"
+)
 
+summary(logistic_subset)
 
+# Lag2 is significant, but none of the others are-- let's see how this performs on the test data anyway
+logistic_subset_predictions <- predict(
+  logistic_subset, 
+  newdata = test_set
+)
+
+# Accuracy
+mean(logistic_subset_predictions == test_set$Direction) # 0
+
+# Now try fitting a KNN model with all Lag variables 
+training_mat <- dplyr::select(training_set, contains("Lag")) %>% 
+  as.matrix()
+
+test_mat <- dplyr::select(test_set, contains("Lag")) %>% 
+  as.matrix()
+
+# Iterate over different values for K from 1-20
+set.seed(1)
+knn_results <- map(1:20, ~ class::knn(
+  train = training_mat, 
+  test = test_mat, 
+  cl = training_labels, 
+  k = .x)
+)
+
+names(knn_results) <- paste0("k_", 1:20)
+
+knn_accuracy <- data.frame(
+  k = seq(1, 20), 
+  accuracy = map_dbl(knn_results, ~ mean(.x == test_set$Direction))
+)
+
+# K= 8 is most accurate
+ggplot(knn_accuracy, aes(k, accuracy)) + 
+  geom_point() + 
+  geom_line()
+
+# Confusion matrix
+table(knn_results$k_8, test_set$Direction)
+
+# False positive rate
+25 / (18 + 25) # 0.58
+
+# False negative rate
+18 / (43 + 18) # 0.29
 ```
   
+Looking at the logistic model, there are no statistically significant interaction terms to include in the model (although we haven't tried higher order polynomials).  We also tried fitting the KNN to the data with all lag variables included, but the accuracy is not substantially better than 50%.  The highest accuracy achieved was with K=8, but still it predicted the correct outcome only about 60% of the time.  
+
+14) This problem uses the `Auto` data set to predict whether a car gets high or low gas mileage.  
+
+  a) If `mpg` is greater than the median, recode as 1; otherwise, recode as 0.
   
+```{r applied 14a}
+# Create binary variable for Auto data
+Auto <- mutate(Auto, mpg01 = as.factor(ifelse(mpg > median(mpg), 1, 0)))
+```
+  
+  b) Exploratory data analysis between `mpg01` and other variables.
+
+```{r applied 14b}
+p1 <- ggplot(Auto, aes(horsepower, displacement, color = mpg01)) + 
+  geom_jitter() + 
+  facet_wrap(~mpg01) +
+  gghighlight::gghighlight() + 
+  labs(x = "Horsepower", y = "Engine displacement")
+
+p2 <- ggplot(Auto, aes(mpg01, weight)) + 
+  geom_boxplot(outlier.shape = NA) + 
+  geom_jitter(aes(color = mpg01)) + 
+  labs(x = "Gas mileage", y = "Weight (lbs)") + 
+  theme(legend.position = "none")
+
+p3 <- Auto %>% 
+  group_by(origin) %>% 
+  summarise(prop_high = length(which(mpg01 == 1)) / n(), 
+            prop_low = 1-prop_high) %>% 
+  pivot_longer(-origin, names_to = "prop", values_to = "value") %>% 
+  mutate(prop = factor(prop, levels = c("prop_low", "prop_high"))) %>% 
+  ggplot(aes(origin, value, fill = prop)) + 
+  geom_col(position = "stack") + 
+  labs(x = "Origin") + 
+  theme(legend.position = "none")
+
+p4 <- Auto %>% 
+  count(origin, mpg01) %>% 
+  ggplot(aes(origin, n, fill = mpg01)) + 
+  geom_col(position = "dodge") + 
+  labs(x = "Origin") + 
+  theme(legend.position = "none")
+
+p1 / (p2 + p3 + p4)
+```
+
+Looking at a few exploratory data analysis plots, there appears to be an association between horsepower, engine displacement, and gas mileage.  In general, vehicles with lower horsepower and engine displacement have high gas mileage.  Not surprisingly, lighter vehicles also tend to have high gas mileage.  There also appears to be an association between the year the vehicle was manufactured and gas mileage, with cars manufactured more recently having high gas mileage relative to older ones.  Finally, when looking at the origin of the vehicle, European and Japanese manufacturers produce higher proportions of high gas mileage vehicles relative to those produced in the United States.  
+
+  c) Split the data into a training set and a test set.  There are only 392 observations, so I'll randomly sample about 80% of the data (313) and use the remaining subset to test the accuracy of the classifier.
+  
+```{r applied 14c}
+Auto$id <- rownames(Auto)
+
+set.seed(1)
+training_ids <- sample(Auto$id, 313)
+
+# Split
+training_auto <- filter(Auto, id %in% training_ids)
+test_auto <- filter(Auto, !id %in% training_ids)
+
+# Fit a logistic regression model to see which variables may be associated with mpg01
+logistic_auto <- glm(
+  mpg01 ~ cylinders + displacement + horsepower + weight + acceleration + year + origin,
+  data = training_auto,
+  family = "binomial"
+)
+
+summary(logistic_auto)
+```
+  
+Looking at the results of the logistic regression model with all variables, only the weight and year are statistically significant, so we'll use these in subsequent models.
+
+  d) LDA on training data.
+  
+```{r applied 14d}
+# Fit model
+lda_auto <- lda(
+  mpg01 ~ weight + year, 
+  data = training_auto
+)
+
+# Predictions
+lda_predictions <- predict(lda_auto, newdata = test_auto)
+
+# Test error
+1 - mean(lda_predictions$class == test_auto$mpg01) # about 7.5%, very low!
+```
+
+  e) QDA on the training data.
+  
+```{r applied 14e}
+# Fit model and make predictions
+qda_auto <- qda(
+  mpg01 ~ weight + year, 
+  data = training_auto
+)
+
+qda_predictions <- predict(qda_auto, newdata = test_auto)
+1 - mean(qda_predictions$class == test_auto$mpg01) # about 10%, a bit higher but pretty good
+```
+
+
+  f) Logistic regression.
+  
+```{r applied 14f}
+logistic_auto <- glm(
+  mpg01 ~ weight + year, 
+  data = training_auto, 
+  family = "binomial"
+)
+
+logistic_predictions <- predict(logistic_auto, newdata = test_auto, type = "response")
+logistic_predictions <- ifelse(logistic_predictions < 0.5, 0, 1)
+1 - mean(logistic_predictions == test_auto$mpg01) # about 8.8%, better than QDA but not quite as good as LDA
+```
+
+  g) Naive Bayes.
+  
+```{r applied 14g}
+naive_bayes_auto <- e1071::naiveBayes(
+  mpg01 ~ weight + year,
+  data = training_auto
+)
+
+(naive_bayes_predictions <- predict(naive_bayes_auto, newdata = test_auto))
+1 - mean(naive_bayes_predictions == test_auto$mpg01) # about 10%, very similar to the QDA model
+```
+
+  h) KNN with several values of K.
+  
+```{r applied 14h}
+training_mat <- as.matrix(dplyr::select(training_auto, weight, year))
+test_mat <- as.matrix(dplyr::select(test_auto, weight, year))
+training_labels <- training_auto$mpg01
+
+set.seed(1)
+knn_auto <- map(1:20, ~ class::knn(
+  train = training_mat, 
+  test = test_mat,
+  cl = training_labels)
+)
+
+knn_res <- data.frame(
+  k = 1:20,
+  test_error = map_dbl(knn_auto, ~ 1 - mean(.x == test_auto$mpg01))
+)
+
+arrange(knn_res, test_error) # K=3 is the lowest with 10%, but most have either 10 or 11% error rates
+```
+
+
